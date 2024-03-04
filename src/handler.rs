@@ -1,7 +1,7 @@
 use crate::command::{self, RedisCommand};
+use crate::config;
 use crate::parser::{self, MessageParserError, RedisValue};
 use crate::utilities;
-use core::str;
 use once_cell::sync::Lazy;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -54,7 +54,11 @@ impl StreamHandler {
             .map_err(|r| HandlerError::Io(r.to_string()))
     }
 
-    pub(crate) fn action(&self, command: RedisCommand) -> Result<RedisValue, HandlerError> {
+    pub(crate) fn action(
+        &self,
+        command: RedisCommand,
+        config: &config::Config,
+    ) -> Result<RedisValue, HandlerError> {
         match command {
             RedisCommand::Ping => Ok(RedisValue::SimpleString("PONG".to_string())),
             RedisCommand::Echo(arg1) => Ok(arg1),
@@ -89,13 +93,16 @@ impl StreamHandler {
                 _ => Err(HandlerError::Other),
             },
             RedisCommand::Info => Ok(ReplicationInfo {
-                role: "master".to_string(),
+                role: match config.clone().get_replica_of() {
+                    Some((host, port)) => "slave".to_string(),
+                    None => "master".to_string(),
+                },
             }
             .into()),
         }
     }
 
-    pub fn handle(&mut self) -> Result<(), HandlerError> {
+    pub fn handle(&mut self, config: &config::Config) -> Result<(), HandlerError> {
         loop {
             let command = match self.read() {
                 Err(e) => return Err(e),
@@ -111,7 +118,7 @@ impl StreamHandler {
                 },
             };
             println!("command received: {:?}", command);
-            let response = self.action(command).unwrap();
+            let response = self.action(command, config).unwrap();
             let response_str: String = (&response).into();
             match self.write(response_str.as_bytes()) {
                 Err(e) => return Err(e),
