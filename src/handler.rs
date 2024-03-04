@@ -1,5 +1,6 @@
 use crate::command::{self, RedisCommand};
 use crate::config;
+use crate::info::ReplicationInfo;
 use crate::parser::{self, MessageParserError};
 use crate::utilities;
 use crate::value::RedisValue;
@@ -12,24 +13,6 @@ static STORE: Lazy<Mutex<HashMap<String, (RedisValue, u64)>>> = Lazy::new(|| {
     let m = HashMap::new();
     Mutex::new(m)
 });
-
-struct ReplicationInfo {
-    role: String,
-}
-
-impl Into<RedisValue> for ReplicationInfo {
-    fn into(self) -> RedisValue {
-        let role = format!("role:{}", self.role);
-        let master_replid = format!(
-            "master_replid:{}",
-            "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
-        );
-        let master_repl_offset = format!("master_repl_offset:{}", 0);
-        RedisValue::bulk_string(
-            vec!["# Replication", &role, &master_replid, &master_repl_offset].join("\n"),
-        )
-    }
-}
 
 #[derive(PartialEq, Debug)]
 pub enum HandlerError {
@@ -68,8 +51,8 @@ impl StreamHandler {
         config: &config::Config,
     ) -> Result<RedisValue, HandlerError> {
         match command {
-            RedisCommand::Ping => Ok(RedisValue::SimpleString("PONG".to_string())),
-            RedisCommand::Echo(arg1) => Ok(arg1),
+            RedisCommand::Ping => Ok(RedisValue::simple_string("PONG")),
+            RedisCommand::Echo(value) => Ok(value),
             RedisCommand::Get(key) => match key {
                 RedisValue::BulkString(Some(key)) => {
                     let mut store = STORE.lock().unwrap();

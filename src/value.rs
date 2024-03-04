@@ -13,6 +13,10 @@ impl RedisValue {
     pub fn null_bulk_string() -> RedisValue {
         RedisValue::BulkString(None)
     }
+
+    pub fn simple_string<S: Into<String>>(s: S) -> RedisValue {
+        RedisValue::SimpleString(s.into())
+    }
 }
 
 impl Into<String> for &RedisValue {

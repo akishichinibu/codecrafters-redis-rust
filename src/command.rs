@@ -28,6 +28,25 @@ impl RedisCommand {
     }
 }
 
+impl Into<RedisValue> for RedisCommand {
+    fn into(self) -> RedisValue {
+        match self {
+            RedisCommand::Ping => vec![RedisValue::bulk_string("ping")],
+            RedisCommand::Echo(v) => vec![RedisValue::bulk_string("echo"), v],
+            RedisCommand::Set(k, v, px) => vec![RedisValue::bulk_string("set"), k, v],
+            RedisCommand::Get(k) => vec![RedisValue::bulk_string("get"), k],
+            RedisCommand::Info => vec![RedisValue::null_bulk_string()],
+        }
+        .into()
+    }
+}
+
+impl Into<RedisValue> for Vec<RedisValue> {
+    fn into(self) -> RedisValue {
+        RedisValue::Array(self)
+    }
+}
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum RedisCommandError {
     Malform,
