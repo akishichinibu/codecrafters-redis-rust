@@ -1,4 +1,5 @@
-use crate::{parser::RedisValue, utilities};
+use crate::utilities;
+use crate::value::RedisValue;
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum RedisCommand {

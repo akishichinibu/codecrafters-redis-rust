@@ -8,6 +8,7 @@ mod config;
 mod handler;
 mod parser;
 mod utilities;
+mod value;
 
 fn main() {
     let config = config::Config::from_args();

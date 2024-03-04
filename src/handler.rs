@@ -1,11 +1,35 @@
 use crate::command::{self, RedisCommand};
 use crate::config;
-use crate::parser::{self, MessageParserError, RedisValue};
+use crate::parser::{self, MessageParserError};
 use crate::utilities;
+use crate::value::RedisValue;
 use once_cell::sync::Lazy;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::{collections::HashMap, sync::Mutex};
+
+static STORE: Lazy<Mutex<HashMap<String, (RedisValue, u64)>>> = Lazy::new(|| {
+    let m = HashMap::new();
+    Mutex::new(m)
+});
+
+struct ReplicationInfo {
+    role: String,
+}
+
+impl Into<RedisValue> for ReplicationInfo {
+    fn into(self) -> RedisValue {
+        let role = format!("role:{}", self.role);
+        let master_replid = format!(
+            "master_replid:{}",
+            "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+        );
+        let master_repl_offset = format!("master_repl_offset:{}", 0);
+        RedisValue::bulk_string(
+            vec!["# Replication", &role, &master_replid, &master_repl_offset].join("\n"),
+        )
+    }
+}
 
 #[derive(PartialEq, Debug)]
 pub enum HandlerError {
@@ -17,22 +41,6 @@ pub enum HandlerError {
 pub struct StreamHandler {
     stream: TcpStream,
 }
-
-struct ReplicationInfo {
-    role: String,
-}
-
-impl Into<RedisValue> for ReplicationInfo {
-    fn into(self) -> RedisValue {
-        let s = vec!["# Replication", &format!("role:{}", self.role)].join("\n");
-        RedisValue::bulk_string(s)
-    }
-}
-
-static STORE: Lazy<Mutex<HashMap<String, (RedisValue, u64)>>> = Lazy::new(|| {
-    let m = HashMap::new();
-    Mutex::new(m)
-});
 
 impl StreamHandler {
     pub fn new(stream: TcpStream) -> Self {
