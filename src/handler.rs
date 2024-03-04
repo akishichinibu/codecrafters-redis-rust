@@ -77,7 +77,7 @@ impl StreamHandler {
                             .lock()
                             .unwrap()
                             .insert(key, (value, expired_at.unwrap_or(0 as u64)));
-                        Ok(RedisValue::SimpleString("OK".to_string()))
+                        Ok(RedisValue::SimpleString("OK".into()))
                     }
                     None => Err(HandlerError::Other),
                 },
@@ -90,6 +90,7 @@ impl StreamHandler {
                 },
             }
             .into()),
+            RedisCommand::Replconf(_, _) => Ok(RedisValue::SimpleString("OK".into())),
         }
     }
 

@@ -49,6 +49,22 @@ impl Redis {
                 let value: RedisValue = RedisCommand::Ping.into();
                 let value_str: String = value.into();
                 client.write_all(value_str.as_bytes()).unwrap();
+
+                let value: RedisValue = RedisCommand::Replconf(
+                    RedisValue::bulk_string("listening-port"),
+                    RedisValue::bulk_string(port.to_string()),
+                )
+                .into();
+                let value_str: String = value.into();
+                client.write_all(value_str.as_bytes()).unwrap();
+
+                let value: RedisValue = RedisCommand::Replconf(
+                    RedisValue::bulk_string("capa"),
+                    RedisValue::bulk_string("psync2"),
+                )
+                .into();
+                let value_str: String = value.into();
+                client.write_all(value_str.as_bytes()).unwrap();
             }
             None => {}
         }

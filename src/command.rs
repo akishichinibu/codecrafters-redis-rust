@@ -7,6 +7,7 @@ pub enum RedisCommand {
     Echo(RedisValue),
     Set(RedisValue, RedisValue, Option<u64>),
     Get(RedisValue),
+    Replconf(RedisValue, RedisValue),
     Info,
 }
 
@@ -36,6 +37,9 @@ impl Into<RedisValue> for RedisCommand {
             RedisCommand::Set(k, v, px) => vec![RedisValue::bulk_string("set"), k, v],
             RedisCommand::Get(k) => vec![RedisValue::bulk_string("get"), k],
             RedisCommand::Info => vec![RedisValue::null_bulk_string()],
+            RedisCommand::Replconf(k, v) => {
+                vec![RedisValue::bulk_string("replconf"), k, v]
+            }
         }
         .into()
     }
@@ -44,6 +48,12 @@ impl Into<RedisValue> for RedisCommand {
 impl Into<RedisValue> for Vec<RedisValue> {
     fn into(self) -> RedisValue {
         RedisValue::Array(self)
+    }
+}
+
+impl Into<RedisValue> for Vec<String> {
+    fn into(self) -> RedisValue {
+        RedisValue::Array(self.iter().map(|r| RedisValue::bulk_string(r)).collect())
     }
 }
 
