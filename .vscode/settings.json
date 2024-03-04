@@ -1,0 +1,11 @@
+{
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll": "explicit",
+    "source.organizeImports.ruff": "explicit",
+    "source.eslint": "explicit"
+  },
+  "[rust]": {
+    "editor.tabSize": 4
+  },
+}
