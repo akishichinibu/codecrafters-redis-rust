@@ -2,6 +2,7 @@ use crate::command::RedisCommand;
 use crate::info::ReplicationInfo;
 use crate::r#type::RedisType;
 use crate::{config, utilities, HandlerError};
+use base64;
 use once_cell::sync::Lazy;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -93,12 +94,12 @@ impl<'a> StreamHandler {
     pub fn server_action(
         command: RedisCommand<'a>,
         config: &config::Config,
-    ) -> Result<RedisType<'static>, HandlerError> {
+    ) -> Result<Vec<RedisType<'static>>, HandlerError> {
         match command {
-            RedisCommand::Ping => Ok(RedisType::simple_string("PONG")),
+            RedisCommand::Ping => Ok(vec![RedisType::simple_string("PONG")]),
             RedisCommand::Echo(value) => match value {
-                None => Ok(RedisType::null_bulk_string()),
-                Some(v) => Ok(RedisType::BulkString(Some(Cow::Owned(v.to_vec())))),
+                None => Ok(vec![RedisType::null_bulk_string()]),
+                Some(v) => Ok(vec![RedisType::BulkString(Some(Cow::Owned(v.to_vec())))]),
             },
             RedisCommand::Get(key) => {
                 let mut store = STORE.lock().unwrap();
@@ -106,13 +107,13 @@ impl<'a> StreamHandler {
                 match store.get(&key) {
                     Some((value, expired_at)) => {
                         if *expired_at == 0 || *expired_at >= utilities::now() {
-                            Ok(value.to_owned())
+                            Ok(vec![value.to_owned()])
                         } else {
                             store.remove(&key);
-                            Ok(RedisType::null_bulk_string())
+                            Ok(vec![RedisType::null_bulk_string()])
                         }
                     }
-                    None => Ok(RedisType::null_bulk_string()),
+                    None => Ok(vec![RedisType::null_bulk_string()]),
                 }
             }
             RedisCommand::Set(key, value, px) => {
@@ -128,19 +129,22 @@ impl<'a> StreamHandler {
                         },
                     ),
                 );
-                Ok(RedisType::simple_string("OK"))
+                Ok(vec![RedisType::simple_string("OK")])
             }
-            RedisCommand::Info => Ok(ReplicationInfo {
+            RedisCommand::Info => Ok(vec![ReplicationInfo {
                 role: match config.clone().get_replica_of() {
                     Some((_, _)) => "slave".to_string(),
                     None => "master".to_string(),
                 },
             }
-            .into()),
-            RedisCommand::Replconf(_, _) => Ok(RedisType::simple_string("OK")),
-            RedisCommand::Psync(_, _) => Ok(RedisType::simple_string(
-                "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0",
-            )),
+            .into()]),
+            RedisCommand::Replconf(_, _) => Ok(vec![RedisType::simple_string("OK")]),
+            RedisCommand::Psync(_, _) => Ok(vec![
+                RedisType::simple_string("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"),
+                RedisType::Rdb(
+                    base64::decode("UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==").unwrap(),
+                ),
+            ]),
         }
     }
 
@@ -189,7 +193,9 @@ impl<'a> StreamHandler {
                     Some(c) => {
                         println!("received command: {:?}", c);
                         let response = Self::server_action(c, config).unwrap();
-                        self.write_redis_type(response).unwrap();
+                        for r in response {
+                            self.write_redis_type(r).unwrap();
+                        }
                     }
                 },
             }

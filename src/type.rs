@@ -5,6 +5,7 @@ pub enum RedisType<'a> {
     SimpleString(Cow<'a, [u8]>),
     BulkString(Option<Cow<'a, [u8]>>),
     Array(Vec<RedisType<'a>>),
+    Rdb(Vec<u8>),
 }
 
 impl<'a> RedisType<'a> {
@@ -22,19 +23,6 @@ impl<'a> RedisType<'a> {
 
     pub fn simple_string<S: Into<&'a str>>(s: S) -> RedisType<'a> {
         RedisType::SimpleString(Cow::from(s.into().as_bytes()))
-    }
-}
-
-impl RedisType<'_> {
-    pub fn to_owned(&self) -> RedisType<'static> {
-        match self {
-            RedisType::SimpleString(v) => RedisType::SimpleString(Cow::from(v.to_vec())),
-            RedisType::BulkString(v) => match v {
-                None => RedisType::null_bulk_string(),
-                Some(v) => RedisType::BulkString(Some(Cow::Owned(v.to_vec()))),
-            },
-            RedisType::Array(a) => RedisType::Array(a.iter().map(|r| r.to_owned()).collect()),
-        }
     }
 }
 
@@ -67,6 +55,12 @@ impl<'a> Into<Vec<u8>> for RedisType<'a> {
                     let b: Vec<u8> = s.into();
                     buffer.extend(b);
                 }
+            }
+            RedisType::Rdb(c) => {
+                buffer.push(b'$');
+                buffer.extend_from_slice(c.len().to_string().as_bytes());
+                buffer.extend_from_slice(b"\r\n");
+                buffer.extend_from_slice(&c);
             }
         }
         buffer
