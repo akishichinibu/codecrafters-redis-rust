@@ -1,41 +1,75 @@
-use crate::command::{self, RedisCommand};
+use crate::command::RedisCommand;
 use crate::info::ReplicationInfo;
-use crate::parser::{self, MessageParserError};
-use crate::utilities;
-use crate::value::RedisValue;
-use crate::{config, Redis};
+use crate::r#type::RedisType;
+use crate::{config, utilities, HandlerError};
 use once_cell::sync::Lazy;
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::{collections::HashMap, sync::Mutex};
+use std::sync::Mutex;
 
-static STORE: Lazy<Mutex<HashMap<String, (RedisValue, u64)>>> = Lazy::new(|| {
+static STORE: Lazy<Mutex<HashMap<String, (RedisType, u64)>>> = Lazy::new(|| {
     let m = HashMap::new();
     Mutex::new(m)
 });
 
-#[derive(PartialEq, Debug)]
-pub enum HandlerError {
-    Io(String),
-    Parser(MessageParserError),
-    Other,
-}
-
 pub struct StreamHandler {
     stream: TcpStream,
+    buffer: [u8; 1024],
 }
 
-impl StreamHandler {
+impl<'a> StreamHandler {
     pub fn new(stream: TcpStream) -> Self {
-        StreamHandler { stream }
+        StreamHandler {
+            stream,
+            buffer: [0; 1024],
+        }
     }
 
-    pub(crate) fn read(&mut self) -> Result<Option<Vec<u8>>, HandlerError> {
-        let mut buffer: [u8; 1024] = [0; 1024];
-        match self.stream.read(&mut buffer) {
+    pub(crate) fn read(&mut self) -> Result<Option<&[u8]>, HandlerError> {
+        match self.stream.read(&mut self.buffer) {
             Ok(0) => Ok(None),
-            Ok(n) => Ok(Some(buffer[0..n].to_vec())),
+            Ok(n) => {
+                println!("received buffer length: {}", n);
+                Ok(Some(&self.buffer[0..n]))
+            }
             Err(e) => Err(HandlerError::Io(e.to_string())),
+        }
+    }
+
+    pub(crate) fn read_command(&mut self) -> Result<Option<RedisCommand>, HandlerError> {
+        match self.read() {
+            Ok(b) => match b {
+                Some(b) => {
+                    let c = RedisCommand::try_from(b);
+                    match c {
+                        Ok(c) => Ok(Some(c)),
+                        Err(e) => Err(HandlerError::Commond(e)),
+                    }
+                }
+                None => Ok(None),
+            },
+            Err(e) => Err(e),
+        }
+    }
+
+    pub(crate) fn read_type(&mut self) -> Result<Option<RedisType>, HandlerError> {
+        match self.read() {
+            Ok(b) => match b {
+                Some(b) => {
+                    let c = RedisType::try_from(b);
+                    match c {
+                        Ok(c) => {
+                            println!("value read: {:?}", c);
+                            Ok(Some(c))
+                        }
+                        Err(e) => Err(HandlerError::Parser(e)),
+                    }
+                }
+                None => Ok(None),
+            },
+            Err(e) => Err(e),
         }
     }
 
@@ -45,93 +79,121 @@ impl StreamHandler {
             .map_err(|r| HandlerError::Io(r.to_string()))
     }
 
-    pub fn handle(&mut self, config: &config::Config) -> Result<(), HandlerError> {
+    pub(crate) fn write_command(&mut self, command: RedisCommand) -> Result<(), HandlerError> {
+        println!("command send: {:?}", command);
+        let buffer: Vec<u8> = command.into();
+        self.write(buffer.as_slice())
+    }
+
+    pub(crate) fn write_redis_type(&mut self, command: RedisType) -> Result<(), HandlerError> {
+        let buffer: Vec<u8> = command.into();
+        self.write(buffer.as_slice())
+    }
+
+    pub fn server_action(
+        command: RedisCommand<'a>,
+        config: &config::Config,
+    ) -> Result<RedisType<'static>, HandlerError> {
+        match command {
+            RedisCommand::Ping => Ok(RedisType::simple_string("PONG")),
+            RedisCommand::Echo(value) => match value {
+                None => Ok(RedisType::null_bulk_string()),
+                Some(v) => Ok(RedisType::BulkString(Some(Cow::Owned(v.to_vec())))),
+            },
+            RedisCommand::Get(key) => {
+                let mut store = STORE.lock().unwrap();
+                let key = String::from_utf8(key.to_vec()).unwrap();
+                match store.get(&key) {
+                    Some((value, expired_at)) => {
+                        if *expired_at == 0 || *expired_at >= utilities::now() {
+                            Ok(value.to_owned())
+                        } else {
+                            store.remove(&key);
+                            Ok(RedisType::null_bulk_string())
+                        }
+                    }
+                    None => Ok(RedisType::null_bulk_string()),
+                }
+            }
+            RedisCommand::Set(key, value, px) => {
+                let mut store = STORE.lock().unwrap();
+                let key = String::from_utf8(key.to_vec()).unwrap();
+                store.insert(
+                    key,
+                    (
+                        RedisType::BulkString(Some(Cow::from(value.into_owned()))),
+                        match px {
+                            None => 0,
+                            Some(px) => px + utilities::now(),
+                        },
+                    ),
+                );
+                Ok(RedisType::simple_string("OK"))
+            }
+            RedisCommand::Info => Ok(ReplicationInfo {
+                role: match config.clone().get_replica_of() {
+                    Some((_, _)) => "slave".to_string(),
+                    None => "master".to_string(),
+                },
+            }
+            .into()),
+            RedisCommand::Replconf(_, _) => Ok(RedisType::simple_string("OK")),
+            RedisCommand::Psync(_, _) => Ok(RedisType::simple_string(
+                "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0",
+            )),
+        }
+    }
+
+    pub fn replica_handshake(replica_port: u32, master_host: &String, master_port: u32) {
+        let client = TcpStream::connect(&format!("{}:{}", master_host, master_port)).unwrap();
+        let mut handler = StreamHandler::new(client);
+
+        handler.write_command(RedisCommand::Ping).unwrap();
+
+        handler.read_type().unwrap().unwrap();
+
+        handler
+            .write_command(RedisCommand::Replconf(
+                Cow::Borrowed("listening-port".as_ref()),
+                Cow::Borrowed(replica_port.to_string().as_bytes()),
+            ))
+            .unwrap();
+
+        handler.read_type().unwrap().unwrap();
+
+        handler
+            .write_command(RedisCommand::Replconf(
+                Cow::Borrowed("capa".as_ref()),
+                Cow::Borrowed("psync2".as_ref()),
+            ))
+            .unwrap();
+
+        handler.read_type().unwrap().unwrap();
+
+        handler
+            .write_command(RedisCommand::Psync(
+                Cow::Borrowed("?".as_ref()),
+                Cow::Borrowed("-1".as_ref()),
+            ))
+            .unwrap();
+
+        handler.read_type().unwrap().unwrap();
+    }
+
+    pub fn server_handle(&mut self, config: &config::Config) -> Result<(), HandlerError> {
         loop {
-            match self.read() {
+            match self.read_command() {
                 Err(e) => return Err(e),
                 Ok(b) => match b {
                     None => break,
-                    Some(b_) => {
-                        let command = handle_buffer(config, b_).unwrap();
-                        let response = action(command, config).unwrap();
-                        let response_str: String = (&response).into();
-                        match self.write(response_str.as_bytes()) {
-                            Err(e) => return Err(e),
-                            _ => {}
-                        }
+                    Some(c) => {
+                        println!("received command: {:?}", c);
+                        let response = Self::server_action(c, config).unwrap();
+                        self.write_redis_type(response).unwrap();
                     }
                 },
             }
         }
         Ok(())
-    }
-}
-
-pub fn action(command: RedisCommand, config: &config::Config) -> Result<RedisValue, HandlerError> {
-    match command {
-        RedisCommand::Ping => Ok(RedisValue::simple_string("PONG")),
-        RedisCommand::Echo(value) => Ok(value),
-        RedisCommand::Get(key) => match key {
-            RedisValue::BulkString(Some(key)) => {
-                let mut store = STORE.lock().unwrap();
-                match store.get(&key) {
-                    Some((value, expired_at)) => {
-                        if *expired_at == 0 || *expired_at >= utilities::now() {
-                            Ok(value.clone())
-                        } else {
-                            store.remove(&key);
-                            Ok(RedisValue::null_bulk_string())
-                        }
-                    }
-                    None => Ok(RedisValue::null_bulk_string()),
-                }
-            }
-            _ => Err(HandlerError::Other),
-        },
-        RedisCommand::Set(key, value, expired_at) => match key {
-            RedisValue::BulkString(key) => match key {
-                Some(key) => {
-                    STORE
-                        .lock()
-                        .unwrap()
-                        .insert(key, (value, expired_at.unwrap_or(0 as u64)));
-                    Ok(RedisValue::SimpleString("OK".into()))
-                }
-                None => Err(HandlerError::Other),
-            },
-            _ => Err(HandlerError::Other),
-        },
-        RedisCommand::Info => Ok(ReplicationInfo {
-            role: match config.clone().get_replica_of() {
-                Some((_, _)) => "slave".to_string(),
-                None => "master".to_string(),
-            },
-        }
-        .into()),
-        RedisCommand::Replconf(_, _) => Ok(RedisValue::SimpleString("OK".into())),
-        RedisCommand::Psync(_, _) => Ok(RedisValue::simple_string("FULLRESYNC <REPL_ID> 0")),
-    }
-}
-
-pub fn handle_buffer(config: &config::Config, b_: Vec<u8>) -> Result<RedisCommand, HandlerError> {
-    println!("received buffer length: {}", b_.len());
-    let mut parser = parser::MessageParser::new(b_.as_slice());
-    let command = match parser.parse() {
-        Ok(v) => command::RedisCommand::try_from(v).unwrap(),
-        Err(e) => return Err(HandlerError::Parser(e)),
-    };
-    println!("command received: {:?}", command);
-    return Ok(command);
-}
-
-pub fn handle_buffer2(config: &config::Config, b_: Vec<u8>) -> Result<RedisValue, HandlerError> {
-    println!("received buffer length: {}", b_.len());
-    let mut parser = parser::MessageParser::new(b_.as_slice());
-    match parser.parse() {
-        Ok(v) => {
-            println!("value received: {:?}", v);
-            Ok(v)
-        }
-        Err(e) => Err(HandlerError::Parser(e)),
     }
 }
