@@ -34,12 +34,10 @@ impl Into<RedisValue> for RedisCommand {
         match self {
             RedisCommand::Ping => vec![RedisValue::bulk_string("ping")],
             RedisCommand::Echo(v) => vec![RedisValue::bulk_string("echo"), v],
-            RedisCommand::Set(k, v, px) => vec![RedisValue::bulk_string("set"), k, v],
+            RedisCommand::Set(k, v, _) => vec![RedisValue::bulk_string("set"), k, v],
             RedisCommand::Get(k) => vec![RedisValue::bulk_string("get"), k],
             RedisCommand::Info => vec![RedisValue::null_bulk_string()],
-            RedisCommand::Replconf(k, v) => {
-                vec![RedisValue::bulk_string("replconf"), k, v]
-            }
+            RedisCommand::Replconf(k, v) => vec![RedisValue::bulk_string("replconf"), k, v],
         }
         .into()
     }
@@ -113,6 +111,13 @@ impl TryFrom<RedisValue> for RedisCommand {
             },
             "info" => match command_args.len() {
                 2 => Ok(RedisCommand::Info),
+                _ => Err(RedisCommandError::DismatchedArgsNum),
+            },
+            "replconf" => match command_args.len() {
+                3 => Ok(RedisCommand::Replconf(
+                    command_args[1].clone(),
+                    command_args[2].clone(),
+                )),
                 _ => Err(RedisCommandError::DismatchedArgsNum),
             },
             _ => Err(RedisCommandError::UnknownCommand),

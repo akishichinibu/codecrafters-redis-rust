@@ -30,7 +30,7 @@ impl Into<String> for &RedisValue {
             RedisValue::Array(a) => {
                 let header = format!("*{}\r\n", a.len());
                 let s: Vec<String> = a.iter().map(|r| r.into()).collect();
-                header + &s.join("\r\n")
+                header + &s.join("")
             }
         }
     }

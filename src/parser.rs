@@ -241,6 +241,7 @@ impl<'a> MessageParser<'a> {
 
     pub fn parse(&mut self) -> Result<RedisValue, MessageParserError> {
         self.state = MessageParserState::Init;
+        // println!("buffer: {:?}", self.buffer[self.t..].to_vec());
 
         match self.get() {
             Some(b'*') => self.parse_array(),

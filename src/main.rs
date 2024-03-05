@@ -1,6 +1,5 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::str::FromStr;
 use std::thread;
 
 use command::RedisCommand;
@@ -50,13 +49,25 @@ impl Redis {
                 let value_str: String = value.into();
                 client.write_all(value_str.as_bytes()).unwrap();
 
+                let mut buf: [u8; 1024] = [0; 1024];
+
+                let l1 = client.read(&mut buf).unwrap();
+                let c = self.config.clone();
+                let response1 = handler::handle_buffer2(&c, buf[0..l1].to_vec()).unwrap();
+                println!("{:?}", response1);
+
                 let value: RedisValue = RedisCommand::Replconf(
                     RedisValue::bulk_string("listening-port"),
-                    RedisValue::bulk_string(port.to_string()),
+                    RedisValue::bulk_string(self.config.port.to_string()),
                 )
                 .into();
                 let value_str: String = value.into();
                 client.write_all(value_str.as_bytes()).unwrap();
+
+                let l1 = client.read(&mut buf).unwrap();
+                let c = self.config.clone();
+                let response1 = handler::handle_buffer2(&c, buf[0..l1].to_vec()).unwrap();
+                println!("{:?}", response1);
 
                 let value: RedisValue = RedisCommand::Replconf(
                     RedisValue::bulk_string("capa"),
@@ -65,6 +76,11 @@ impl Redis {
                 .into();
                 let value_str: String = value.into();
                 client.write_all(value_str.as_bytes()).unwrap();
+
+                let l1 = client.read(&mut buf).unwrap();
+                let c = self.config.clone();
+                let response1 = handler::handle_buffer2(&c, buf[0..l1].to_vec()).unwrap();
+                println!("{:?}", response1);
             }
             None => {}
         }
