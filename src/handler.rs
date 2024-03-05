@@ -109,6 +109,7 @@ pub fn action(command: RedisCommand, config: &config::Config) -> Result<RedisVal
         }
         .into()),
         RedisCommand::Replconf(_, _) => Ok(RedisValue::SimpleString("OK".into())),
+        RedisCommand::Psync(_, _) => Ok(RedisValue::simple_string("FULLRESYNC <REPL_ID> 0")),
     }
 }
 

@@ -1,5 +1,6 @@
 use crate::utilities;
 use crate::value::RedisValue;
+use std::vec;
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum RedisCommand {
@@ -9,6 +10,7 @@ pub enum RedisCommand {
     Get(RedisValue),
     Replconf(RedisValue, RedisValue),
     Info,
+    Psync(RedisValue, RedisValue),
 }
 
 impl RedisCommand {
@@ -38,6 +40,7 @@ impl Into<RedisValue> for RedisCommand {
             RedisCommand::Get(k) => vec![RedisValue::bulk_string("get"), k],
             RedisCommand::Info => vec![RedisValue::null_bulk_string()],
             RedisCommand::Replconf(k, v) => vec![RedisValue::bulk_string("replconf"), k, v],
+            RedisCommand::Psync(id, offset) => vec![RedisValue::bulk_string("psync"), id, offset],
         }
         .into()
     }
@@ -115,6 +118,13 @@ impl TryFrom<RedisValue> for RedisCommand {
             },
             "replconf" => match command_args.len() {
                 3 => Ok(RedisCommand::Replconf(
+                    command_args[1].clone(),
+                    command_args[2].clone(),
+                )),
+                _ => Err(RedisCommandError::DismatchedArgsNum),
+            },
+            "psync" => match command_args.len() {
+                3 => Ok(RedisCommand::Psync(
                     command_args[1].clone(),
                     command_args[2].clone(),
                 )),

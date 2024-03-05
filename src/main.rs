@@ -81,6 +81,19 @@ impl Redis {
                 let c = self.config.clone();
                 let response1 = handler::handle_buffer2(&c, buf[0..l1].to_vec()).unwrap();
                 println!("{:?}", response1);
+
+                let value: RedisValue = RedisCommand::Psync(
+                    RedisValue::bulk_string("?"),
+                    RedisValue::bulk_string("-1"),
+                )
+                .into();
+                let value_str: String = value.into();
+                client.write_all(value_str.as_bytes()).unwrap();
+
+                let l1 = client.read(&mut buf).unwrap();
+                let c = self.config.clone();
+                let response1 = handler::handle_buffer2(&c, buf[0..l1].to_vec()).unwrap();
+                println!("{:?}", response1);
             }
             None => {}
         }
