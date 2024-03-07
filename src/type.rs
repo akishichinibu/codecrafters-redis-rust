@@ -24,6 +24,20 @@ impl<'a> RedisType<'a> {
     pub fn simple_string<S: Into<&'a str>>(s: S) -> RedisType<'a> {
         RedisType::SimpleString(Cow::from(s.into().as_bytes()))
     }
+
+    pub fn to_owned(&self) -> RedisType<'static> {
+        match self {
+            RedisType::SimpleString(s) => {
+                RedisType::SimpleString(Cow::Owned(s.clone().into_owned()))
+            }
+            RedisType::BulkString(s) => match s {
+                Some(s) => RedisType::BulkString(Some(Cow::Owned(s.clone().into_owned()))),
+                None => RedisType::BulkString(None),
+            },
+            RedisType::Array(a) => RedisType::Array(a.iter().map(|r| r.to_owned()).collect()),
+            RedisType::Rdb(s) => RedisType::SimpleString(Cow::Owned(s.clone())),
+        }
+    }
 }
 
 impl<'a> Into<Vec<u8>> for RedisType<'a> {

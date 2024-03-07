@@ -13,8 +13,9 @@ impl Config {
     pub fn get_replica_of(self) -> Option<(String, usize)> {
         match self.replicaof {
             Some(args) => {
+                let host = args[0].to_string();
                 let port = args[1].parse().unwrap();
-                Some((args[0].clone(), port))
+                Some((host, port))
             }
             None => None,
         }

@@ -14,6 +14,33 @@ pub enum RedisCommand<'a> {
     Psync(Cow<'a, [u8]>, Cow<'a, [u8]>),
 }
 
+impl<'a> RedisCommand<'a> {
+    pub fn to_owned(&self) -> RedisCommand<'static> {
+        match self {
+            RedisCommand::Ping => RedisCommand::Ping,
+            RedisCommand::Echo(v) => match v {
+                Some(v) => RedisCommand::Echo(Some(Cow::Owned(v.clone().into_owned()))),
+                None => RedisCommand::Echo(None),
+            },
+            RedisCommand::Get(k) => RedisCommand::Get(Cow::Owned(k.clone().into_owned())),
+            RedisCommand::Set(k, v, px) => RedisCommand::Set(
+                Cow::Owned(k.clone().into_owned()),
+                Cow::Owned(v.clone().into_owned()),
+                *px,
+            ),
+            RedisCommand::Replconf(k, v) => RedisCommand::Replconf(
+                Cow::Owned(k.clone().into_owned()),
+                Cow::Owned(v.clone().into_owned()),
+            ),
+            RedisCommand::Info => RedisCommand::Info,
+            RedisCommand::Psync(k, v) => RedisCommand::Psync(
+                Cow::Owned(k.clone().into_owned()),
+                Cow::Owned(v.clone().into_owned()),
+            ),
+        }
+    }
+}
+
 impl<'a> Into<Vec<u8>> for RedisCommand<'a> {
     fn into(self) -> Vec<u8> {
         let args: RedisType = match self {
