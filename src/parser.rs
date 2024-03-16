@@ -294,7 +294,7 @@ impl RedisValueParser {
                         self.state_stack
                             .push_in_reverse(vec![MessageParserState::WaitForSn]);
                     }
-                    Some((t, b)) => {
+                    Some((_, b)) => {
                         content.push(*b);
                         self.state_stack
                             .push(MessageParserState::ReadingSimpleString { content })

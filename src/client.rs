@@ -45,10 +45,12 @@ pub async fn client_process(
 ) {
     println!("[client: {}] process started. ", client_id);
     let (mut reader, mut writer) = client.into_split();
+    let is_done = Arc::new(RwLock::new(false));
 
     // read from tcp stream and put the value into the channel
     let _redis = redis.clone();
     let _client_id = client_id.clone();
+    let _is_done = is_done.clone();
     let read_from_client_task = task::spawn(async move {
         println!("[client: {}] start to read from stream", _client_id);
         let mut parser = RedisValueParser::new();
@@ -56,7 +58,8 @@ pub async fn client_process(
             let from_client = reader.read_command(&mut parser).await;
             match from_client {
                 Ok((None, _)) => {
-                    break;
+                    let mut v = _is_done.write().await;
+                    *v = true;
                 }
                 Ok((Some(command), _)) => {
                     let channel = {
@@ -83,8 +86,13 @@ pub async fn client_process(
     // read from to_client_receiver channel and write the value to tcp stream
     let _redis = redis.clone();
     let _client_id = client_id.clone();
+    let _is_done = is_done.clone();
     let write_to_client_task = task::spawn(async move {
         loop {
+            if *_is_done.read().await {
+                println!("[client: {}] has done. exited. ", _client_id);
+                break;
+            }
             let channel = {
                 let channels = _redis.channels.read().await;
                 channels.get(&_client_id).unwrap().clone()
@@ -112,7 +120,12 @@ pub async fn client_process(
 
     let redis = redis.clone();
     let _client_id = client_id.clone();
+    let _is_done = is_done.clone();
     loop {
+        if *_is_done.read().await {
+            println!("[client: {}] has done. exited. ", _client_id);
+            break;
+        }
         let channel = {
             let channels = redis.channels.read().await;
             channels.get(&client_id.clone()).unwrap().clone()

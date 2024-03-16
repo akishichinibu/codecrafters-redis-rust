@@ -23,6 +23,12 @@ impl Into<String> for &RedisBulkString {
     }
 }
 
+impl Into<RedisValue> for RedisBulkString {
+    fn into(self) -> RedisValue {
+        RedisValue::BulkString(Some(self))
+    }
+}
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum RedisValue {
     SimpleString(String),

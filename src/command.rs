@@ -4,7 +4,6 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::parser::{MessageParserStateError, RedisValueParser};
 use crate::value::{RedisBulkString, RedisValue};
-use core::num;
 use std::io::ErrorKind;
 use std::vec;
 
@@ -42,8 +41,8 @@ impl Into<RedisValue> for &RedisCommand {
             RedisCommand::Set(k, v, px) => {
                 let mut vs = vec![
                     RedisValue::bulk_string("set"),
-                    RedisValue::BulkString(Some(k.clone())),
-                    RedisValue::BulkString(Some(v.clone())),
+                    k.to_owned().into(),
+                    v.to_owned().into(),
                 ];
                 if let Some(px) = px {
                     vs.push(RedisValue::bulk_string("px"));
@@ -51,25 +50,19 @@ impl Into<RedisValue> for &RedisCommand {
                 }
                 vs
             }
-            RedisCommand::Get(k) => vec![
-                RedisValue::bulk_string("get"),
-                RedisValue::BulkString(Some(k.clone())),
-            ],
-            RedisCommand::Info(v) => vec![
-                RedisValue::bulk_string("info"),
-                RedisValue::BulkString(Some(v.clone())),
-            ],
+            RedisCommand::Get(k) => vec![RedisValue::bulk_string("get"), k.to_owned().into()],
+            RedisCommand::Info(v) => vec![RedisValue::bulk_string("info"), v.to_owned().into()],
             RedisCommand::Replconf(k, v) => {
                 vec![
                     RedisValue::bulk_string("replconf"),
-                    RedisValue::BulkString(Some(k.clone())),
-                    RedisValue::BulkString(Some(v.clone())),
+                    k.to_owned().into(),
+                    v.to_owned().into(),
                 ]
             }
             RedisCommand::Psync(id, offset) => vec![
                 RedisValue::bulk_string("psync"),
-                RedisValue::BulkString(Some(id.clone())),
-                RedisValue::BulkString(Some(offset.clone())),
+                id.to_owned().into(),
+                offset.to_owned().into(),
             ],
             RedisCommand::Wait(number, timeout) => vec![
                 RedisValue::bulk_string("wait"),
