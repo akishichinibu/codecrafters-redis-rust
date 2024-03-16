@@ -1,17 +1,23 @@
+use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
+
 use command::RedisCommand;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::RwLock;
 use tokio::task;
 
+use crate::command::RedisTcpStreamWriteExt;
 use crate::redis::{Redis, StoreItem};
-use crate::replica::{brocast_to_replicas, ReplicationInfo};
+use crate::replica::ReplicationInfo;
 use crate::{command, utilities};
 
 use crate::value::RedisValue;
 
+#[derive(Debug)]
 pub struct WorkerMessage {
     pub command: RedisCommand,
     pub client_id: Option<String>,
-    pub responser: Option<Sender<RedisValue>>,
+    pub responser: Option<Arc<RwLock<Sender<RedisValue>>>>,
 }
 
 pub async fn worker_process(redis: Redis, receiver: Receiver<WorkerMessage>) {
@@ -24,11 +30,10 @@ pub async fn worker_process(redis: Redis, receiver: Receiver<WorkerMessage>) {
         } else {
             continue;
         };
-        println!("worker received command: {:?}", message.command);
+        println!("worker messaged received: {:?}", message);
         let command: RedisCommand = message.command.clone();
-        let command2: RedisCommand = message.command.clone();
 
-        let response = match command {
+        let response = match message.command {
             RedisCommand::Ping => vec![RedisValue::simple_string("PONG")],
             RedisCommand::Echo(value) => vec![RedisValue::BulkString(Some(value))],
             RedisCommand::Get(key) => {
@@ -83,17 +88,46 @@ pub async fn worker_process(redis: Redis, receiver: Receiver<WorkerMessage>) {
                     store.insert(key, StoreItem { value, expired_at });
                 }
                 // if current node is master node, broadcast the write commmand to all replicas
-                if redis.clone().config.get_replica_of() == None {
-                    let r = redis.clone();
-                    task::spawn(brocast_to_replicas(r, command2));
+                if redis.config.get_replica_of() == None {
+                    brocast_to_replicas(redis.clone(), command).await.unwrap();
                 }
                 vec![RedisValue::simple_string("OK")]
             }
         };
         if let Some(responser) = message.responser {
             for r in response {
-                responser.send(r).await.unwrap()
+                let res = responser.read().await;
+                res.send(r).await.unwrap()
             }
         }
+        task::yield_now().await;
     }
+}
+
+pub async fn brocast_to_replicas(redis: Redis, command: RedisCommand) -> Result<(), ()> {
+    let replicas = redis.replicas.read().await;
+    println!(
+        "start to broadcast to replicas({}): {:?}",
+        replicas.len(),
+        replicas
+    );
+
+    for id in replicas.iter() {
+        let channel = {
+            let channels = redis.channels.read().await;
+            let channel = channels.get(id).unwrap();
+            channel.clone()
+        };
+        let writer = {
+            let channel = channel.read().await;
+            let writer = channel.writer.read().await;
+            writer.clone()
+        };
+        let value: RedisValue = (&command.clone()).into();
+        writer.send(value).await.unwrap();
+        println!("broadcast to client {} done, {:?}", id, command);
+    }
+
+    println!("broadcast to replicas done: {}", replicas.len());
+    Ok(())
 }

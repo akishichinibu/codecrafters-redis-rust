@@ -1,8 +1,10 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{ReadHalf, WriteHalf};
+use tokio::net::{TcpSocket, TcpStream};
 
 use crate::parser::{MessageParserStateError, RedisValueParser};
 use crate::value::{RedisBulkString, RedisValue};
+use std::io::{Error, ErrorKind};
 use std::vec;
 
 #[derive(PartialEq, Debug, Clone)]
@@ -59,12 +61,6 @@ impl Into<RedisValue> for &RedisCommand {
             ],
         }
         .into()
-    }
-}
-
-impl Into<RedisValue> for RedisCommand {
-    fn into(self) -> RedisValue {
-        self.into()
     }
 }
 
@@ -196,18 +192,22 @@ impl<'a> RedisTcpStreamReadExt for ReadHalf<'a> {
         &mut self,
         parser: &mut RedisValueParser,
     ) -> Result<Option<RedisValue>, std::io::Error> {
+        println!("try to read a value");
         let mut buffer: [u8; 1024] = [0; 1024];
         match self.read(buffer.as_mut_slice()).await {
-            Ok(0) => Ok(None),
+            Err(e) => Err(e),
+            Ok(0) => Err(ErrorKind::ConnectionAborted.into()),
             Ok(n) => {
                 println!("read {}", n);
                 parser.append(&buffer[0..n]);
                 match parser.parse() {
                     Ok((value, _)) => Ok(value),
-                    Err(e) => panic!("{:?}", e),
+                    Err(e) => match e {
+                        MessageParserStateError::UnexceptedTermination => Ok(None),
+                        _ => panic!("{:?}", e),
+                    },
                 }
             }
-            Err(e) => Err(e),
         }
     }
 
@@ -248,20 +248,82 @@ impl<'a> RedisTcpStreamWriteExt for WriteHalf<'a> {
 
     async fn write_command(&mut self, command: &RedisCommand) -> Result<(), std::io::Error> {
         let value: RedisValue = command.into();
+        let bytes: Vec<u8> = (&value).into();
+        self.write_all(bytes.as_slice()).await
+    }
+}
+
+impl RedisTcpStreamWriteExt for TcpStream {
+    async fn write_value(&mut self, value: &RedisValue) -> Result<(), std::io::Error> {
         let bytes: Vec<u8> = value.into();
         self.write_all(bytes.as_slice()).await
+    }
+
+    async fn write_command(&mut self, command: &RedisCommand) -> Result<(), std::io::Error> {
+        let value: RedisValue = command.into();
+        let bytes: Vec<u8> = (&value).into();
+        self.write_all(bytes.as_slice()).await
+    }
+}
+
+impl RedisTcpStreamReadExt for TcpStream {
+    async fn read_value(
+        &mut self,
+        parser: &mut RedisValueParser,
+    ) -> Result<Option<RedisValue>, std::io::Error> {
+        let mut buffer: [u8; 1024] = [0; 1024];
+        match self.read(buffer.as_mut_slice()).await {
+            Ok(0) => Ok(None),
+            Ok(n) => {
+                println!("read {}", n);
+                parser.append(&buffer[0..n]);
+                match parser.parse() {
+                    Ok((value, _)) => Ok(value),
+                    Err(e) => panic!("{:?}", e),
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn read_command(
+        &mut self,
+        parser: &mut RedisValueParser,
+    ) -> Result<Option<RedisCommand>, std::io::Error> {
+        let value = match self.read_value(parser).await {
+            Ok(value) => value,
+            Err(e) => return Err(e),
+        };
+        let value = if let Some(value) = value {
+            value
+        } else {
+            return Ok(None);
+        };
+        match value {
+            RedisValue::Array(a) => {
+                let command: RedisCommand = RedisValue::Array(a).try_into().unwrap();
+                println!("received command: {:?}", command);
+                Ok(Some(command))
+            }
+            _ => panic!(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::parser;
+
     use super::*;
 
     #[test]
     fn test_echo_command() {
         let input = b"*2\r\n$4\r\necho\r\n$3\r\nhey\r\n";
-        // let value: RedisValue = input.as_slice().try_into().unwrap();
-        // let c = RedisCommand::try_from(input.as_slice()).unwrap();
-        // assert_eq!(RedisCommand::Echo(Some(Cow::Borrowed("hey".as_bytes()))), c);
+        let mut parser = RedisValueParser::new();
+        parser.append(input);
+
+        let (value, t) = parser.parse().unwrap();
+        let c: RedisCommand = value.unwrap().try_into().unwrap();
+        assert_eq!(RedisCommand::Echo("hey".into()), c);
     }
 }

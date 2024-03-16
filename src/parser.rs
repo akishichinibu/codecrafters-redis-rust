@@ -1,3 +1,5 @@
+use std::slice::Iter;
+
 use crate::value::RedisValue;
 
 #[derive(PartialEq, Debug, Clone)]
@@ -20,6 +22,9 @@ enum MessageParserState {
         length: LengthState,
         content: Vec<u8>,
     },
+    ReadingSimpleString {
+        content: Vec<u8>,
+    },
     ReadingArray {
         length: LengthState,
         collected: usize,
@@ -28,10 +33,9 @@ enum MessageParserState {
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum MessageParserStateError {
-    UnexceptedToken(u8, usize, u32),
     UnexceptedTermination,
+    UnexceptedToken(u8, usize, u32),
     UnexceptedValue(String),
-    Unknown,
 }
 
 impl MessageParserState {
@@ -43,40 +47,62 @@ impl MessageParserState {
     }
 }
 
+trait VecExt<'a, U, T>
+where
+    U: 'a,
+{
+    fn push_in_reverse(&mut self, elements: T);
+}
+
+impl<'a, U, T> VecExt<'a, U, T> for Vec<U>
+where
+    U: Clone,
+    U: 'a,
+    T: Into<Vec<U>>,
+{
+    fn push_in_reverse(&mut self, elements: T) {
+        elements
+            .into()
+            .iter()
+            .rev()
+            .for_each(|s| self.push(s.clone()));
+    }
+}
+
 pub struct RedisValueParser {
     bytes_buffer: Vec<u8>,
-    stack: Vec<MessageParserState>,
-    buffer: Vec<RedisValue>,
+    value_buffer: Vec<RedisValue>,
+    state_stack: Vec<MessageParserState>,
 }
 
 impl RedisValueParser {
     pub fn new() -> RedisValueParser {
         RedisValueParser {
             bytes_buffer: Vec::new(),
-            stack: Vec::new(),
-            buffer: Vec::new(),
+            state_stack: Vec::new(),
+            value_buffer: Vec::new(),
         }
     }
 
-    fn push_states_in_reverse<'a, T: Into<Vec<MessageParserState>>>(&mut self, states: T) {
-        states
-            .into()
-            .iter()
-            .rev()
-            .for_each(|s| self.stack.push(s.to_owned()));
-    }
+    // fn push_states_in_reverse<T: Into<Vec<MessageParserState>>>(&mut self, states: T) {
+    //     states
+    //         .into()
+    //         .iter()
+    //         .rev()
+    //         .for_each(|s| self.state_stack.push(s.to_owned()));
+    // }
 
     pub fn append(&mut self, input: &[u8]) {
         self.bytes_buffer.extend_from_slice(input);
     }
 
     pub fn parse(&mut self) -> Result<(Option<RedisValue>, usize), MessageParserStateError> {
-        self.stack.push(MessageParserState::Initial);
+        self.state_stack.push(MessageParserState::Initial);
         let mut input = self.bytes_buffer.iter().enumerate();
         let mut last_pos: usize = 0;
 
         loop {
-            let state = if let Some(state) = self.stack.pop() {
+            let state = if let Some(state) = self.state_stack.pop() {
                 state
             } else {
                 break;
@@ -84,25 +110,34 @@ impl RedisValueParser {
 
             println!(
                 "* ; state: {:?}; stack: {:?}; buffer: {:?}",
-                state, self.stack, self.buffer
+                state, self.state_stack, self.value_buffer
             );
             match state {
                 MessageParserState::Initial => match input.next() {
                     Some((t, b'$')) => {
-                        println!("{} {:?} {:?}: found an string", t, state, self.stack);
+                        println!("{} {:?} {:?}: found an string", t, state, self.state_stack);
                         last_pos = t;
-                        self.stack.push(MessageParserState::ReadingBulkString {
-                            length: LengthState::Reading,
-                            content: Vec::new(),
-                        });
+                        self.state_stack
+                            .push(MessageParserState::ReadingBulkString {
+                                length: LengthState::Reading,
+                                content: Vec::new(),
+                            });
                     }
                     Some((t, b'*')) => {
-                        println!("{:?} {:?}: found an array", state, self.stack);
+                        println!("{:?} {:?}: found an array", state, self.state_stack);
                         last_pos = t;
-                        self.stack.push(MessageParserState::ReadingArray {
+                        self.state_stack.push(MessageParserState::ReadingArray {
                             length: LengthState::Reading,
                             collected: 0,
                         });
+                    }
+                    Some((t, b'+')) => {
+                        println!("{:?} {:?}: found an simple string", state, self.state_stack);
+                        last_pos = t;
+                        self.state_stack
+                            .push(MessageParserState::ReadingSimpleString {
+                                content: Vec::new(),
+                            });
                     }
                     Some((t, eb)) => {
                         return Err(MessageParserStateError::UnexceptedToken(*eb, t, line!()))
@@ -114,7 +149,7 @@ impl RedisValueParser {
                     mut content,
                 } => match length {
                     LengthState::Reading => {
-                        self.push_states_in_reverse(vec![
+                        self.state_stack.push_in_reverse(vec![
                             MessageParserState::reading_length(),
                             MessageParserState::ReadingBulkString {
                                 length: LengthState::Loading,
@@ -122,9 +157,9 @@ impl RedisValueParser {
                             },
                         ]);
                     }
-                    LengthState::Loading => match self.buffer.pop() {
+                    LengthState::Loading => match self.value_buffer.pop() {
                         Some(RedisValue::Integer(l)) => {
-                            self.push_states_in_reverse(vec![
+                            self.state_stack.push_in_reverse(vec![
                                 MessageParserState::ReadingBulkString {
                                     length: LengthState::Loaded(l),
                                     content,
@@ -143,15 +178,16 @@ impl RedisValueParser {
                             content.push(*b);
                             last_pos = t;
                             if content.len() < l {
-                                self.stack.push(MessageParserState::ReadingBulkString {
-                                    length,
-                                    content,
-                                });
+                                self.state_stack
+                                    .push(MessageParserState::ReadingBulkString {
+                                        length,
+                                        content,
+                                    });
                             } else {
                                 let s = RedisValue::bulk_string_from_bytes(content.as_slice());
-                                self.buffer.push(s);
+                                self.value_buffer.push(s);
 
-                                self.push_states_in_reverse(vec![
+                                self.state_stack.push_in_reverse(vec![
                                     MessageParserState::WaitForSr,
                                     MessageParserState::WaitForSn,
                                 ]);
@@ -162,7 +198,7 @@ impl RedisValueParser {
                 },
                 MessageParserState::ReadingArray { length, collected } => match length {
                     LengthState::Reading => {
-                        self.push_states_in_reverse(vec![
+                        self.state_stack.push_in_reverse(vec![
                             MessageParserState::reading_length(),
                             MessageParserState::ReadingArray {
                                 length: LengthState::Loading,
@@ -170,9 +206,9 @@ impl RedisValueParser {
                             },
                         ]);
                     }
-                    LengthState::Loading => match self.buffer.pop() {
+                    LengthState::Loading => match self.value_buffer.pop() {
                         Some(RedisValue::Integer(l)) => {
-                            self.stack.push(MessageParserState::ReadingArray {
+                            self.state_stack.push(MessageParserState::ReadingArray {
                                 length: LengthState::Loaded(l),
                                 collected,
                             });
@@ -186,7 +222,7 @@ impl RedisValueParser {
                     },
                     LengthState::Loaded(length) => {
                         if collected < length {
-                            self.push_states_in_reverse(vec![
+                            self.state_stack.push_in_reverse(vec![
                                 MessageParserState::Initial,
                                 MessageParserState::ReadingArray {
                                     length: LengthState::Loaded(length),
@@ -194,10 +230,25 @@ impl RedisValueParser {
                                 },
                             ]);
                         } else {
-                            let s = RedisValue::Array(self.buffer.drain(0..length).collect());
-                            self.buffer.push(s);
+                            let s = RedisValue::Array(self.value_buffer.drain(0..length).collect());
+                            self.value_buffer.push(s);
                         }
                     }
+                },
+                MessageParserState::ReadingSimpleString { mut content } => match input.next() {
+                    Some((_, b'\r')) => {
+                        self.value_buffer.push(RedisValue::SimpleString(
+                            String::from_utf8(content).unwrap(),
+                        ));
+                        self.state_stack
+                            .push_in_reverse(vec![MessageParserState::WaitForSn]);
+                    }
+                    Some((t, b)) => {
+                        content.push(*b);
+                        self.state_stack
+                            .push(MessageParserState::ReadingSimpleString { content })
+                    }
+                    None => return Ok((None, last_pos)),
                 },
                 MessageParserState::WaitForSn => match input.next() {
                     Some((t, b'\n')) => last_pos = t,
@@ -219,10 +270,12 @@ impl RedisValueParser {
                 } => match length {
                     None => match input.next() {
                         Some((t, b)) => match b {
-                            b'0'..=b'9' => self.stack.push(MessageParserState::ReadingLength {
-                                length: Some((b - b'0') as usize),
-                                heading_zero,
-                            }),
+                            b'0'..=b'9' => {
+                                self.state_stack.push(MessageParserState::ReadingLength {
+                                    length: Some((b - b'0') as usize),
+                                    heading_zero,
+                                })
+                            }
                             eb => {
                                 return Err(MessageParserStateError::UnexceptedToken(
                                     *eb,
@@ -243,14 +296,14 @@ impl RedisValueParser {
                                         line!(),
                                     ));
                                 }
-                                self.stack.push(MessageParserState::ReadingLength {
+                                self.state_stack.push(MessageParserState::ReadingLength {
                                     length: Some(length * 10 + (b - b'0') as usize),
                                     heading_zero,
                                 });
                             }
                             b'\r' => {
-                                self.buffer.push(RedisValue::Integer(length));
-                                self.stack.push(MessageParserState::WaitForSn);
+                                self.value_buffer.push(RedisValue::Integer(length));
+                                self.state_stack.push(MessageParserState::WaitForSn);
                             }
                             eb => {
                                 return Err(MessageParserStateError::UnexceptedToken(
@@ -266,7 +319,7 @@ impl RedisValueParser {
             }
         }
 
-        let v = self.buffer.pop();
+        let v = self.value_buffer.pop();
         self.bytes_buffer.drain(0..=last_pos);
         return Ok((v, last_pos));
     }
@@ -278,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_parser_bulk_string() {
-        let mut input = "$5\r\n12345\r\n$3\r\nxyz\r\n$5\r\nabcde\r\n".as_bytes();
+        let input = "$5\r\n12345\r\n$3\r\nxyz\r\n$5\r\nabcde\r\n".as_bytes();
         let mut parser = RedisValueParser::new();
 
         parser.append(input);
@@ -298,8 +351,10 @@ mod tests {
 
     #[test]
     fn test_parse_array() {
-        let mut input = "*2\r\n$5\r\nhello\r\n$5\r\nworld\r\n$5\r\na".as_bytes();
+        let input = "*2\r\n$5\r\nhello\r\n$5\r\nworld\r\n$5\r\na".as_bytes();
         let mut parser = RedisValueParser::new();
+        parser.append(input);
+
         let (values, t) = parser.parse().unwrap();
 
         match values {
@@ -348,10 +403,12 @@ mod tests {
         assert_eq!(3, t);
     }
 
-    // #[test]
-    // fn test_parse_integer() {
-    //     let input = "232\r".as_bs();
-    //     let mut parser = RedisValueParser::new(input);
-    //     assert_eq!(232 as usize, parser.parse_integer().unwrap());
-    // }
+    #[test]
+    fn test_parse_simple_string() {
+        let input = "+HAPPY\r\n".as_bytes();
+        let mut parser = RedisValueParser::new();
+        parser.append(input);
+        let (value, t) = parser.parse().unwrap();
+        assert_eq!(Some(RedisValue::SimpleString("HAPPY".into())), value);
+    }
 }

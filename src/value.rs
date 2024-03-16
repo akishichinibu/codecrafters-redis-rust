@@ -70,7 +70,7 @@ impl Into<Vec<u8>> for &RedisValue {
                 buffer.extend_from_slice(a.len().to_string().as_bytes());
                 buffer.extend_from_slice(CRLF);
                 for s in a {
-                    let b: Vec<u8> = s.to_owned().into();
+                    let b: Vec<u8> = s.into();
                     buffer.extend(b);
                 }
             }
@@ -89,12 +89,6 @@ impl Into<Vec<u8>> for &RedisValue {
 impl Into<RedisValue> for Vec<RedisValue> {
     fn into(self) -> RedisValue {
         RedisValue::Array(self)
-    }
-}
-
-impl Into<Vec<u8>> for RedisValue {
-    fn into(self) -> Vec<u8> {
-        self.into()
     }
 }
 

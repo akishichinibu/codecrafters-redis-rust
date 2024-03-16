@@ -21,10 +21,7 @@ impl<'a> Into<RedisValue> for ReplicationInfo {
     }
 }
 
-pub async fn handle_replica_handshake(
-    redis: Redis,
-    worker_sender: Sender<WorkerMessage>,
-) -> Result<TcpStream, std::io::Error> {
+pub async fn handle_replica_handshake(redis: Redis) -> Result<TcpStream, std::io::Error> {
     let (master_host, master_port) = if let Some(c) = redis.clone().config.get_replica_of() {
         c
     } else {
@@ -41,6 +38,7 @@ pub async fn handle_replica_handshake(
     let (mut reader, mut writer) = connection.split();
     let mut parser = RedisValueParser::new();
 
+    println!("connection to master {} success", master_url);
     writer.write_command(&RedisCommand::Ping).await.unwrap();
 
     reader.read_value(&mut parser).await.unwrap();
@@ -69,33 +67,33 @@ pub async fn handle_replica_handshake(
 
     reader.read_value(&mut parser).await.unwrap();
     // connection.read_rdb().unwrap_or(RedisValue::Rdb(Vec::new()));
+    Ok(connection)
+}
+
+// read the command from master node and send them to the worker node
+pub async fn listen_to_master_progate(
+    redis: Redis,
+    mut connection: TcpStream,
+    worker_sender: Sender<WorkerMessage>,
+) -> Result<(), std::io::Error> {
+    println!("start to listen to master node");
+    let mut parser = RedisValueParser::new();
+    let (mut reader, _) = connection.split();
 
     loop {
         let command = match reader.read_command(&mut parser).await {
             Ok(command) => command,
             Err(e) => return Err(e),
         };
+        println!("receive a progate commmand from master: {:?}", command);
+
         if let Some(command) = command {
             let message = WorkerMessage {
                 command,
                 client_id: None,
                 responser: None,
             };
-            worker_sender.send(message).await;
+            worker_sender.send(message).await.unwrap();
         }
     }
-}
-
-pub async fn brocast_to_replicas(redis: Redis, command: RedisCommand) -> Result<(), ()> {
-    let replicas = redis.replicas.read().await;
-    let handlers = redis.handlers.read().await;
-    let value: RedisValue = command.into();
-
-    for id in replicas.iter() {
-        let handler = handlers.get(id).unwrap();
-        let writer = handler.writer.write().await;
-        writer.send(value.clone());
-        println!("broadcast to port done {}, {:?}", 1111, value);
-    }
-    Ok(())
 }

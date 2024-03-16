@@ -1,15 +1,19 @@
 use crate::value::RedisValue;
+use base64::read;
+use std::borrow::BorrowMut;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use structopt::StructOpt;
+use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(name = "redis")]
 pub struct RedisConfig {
-    #[structopt(long, default_value = "localhost")]
+    #[structopt(long, default_value = "127.0.0.1")]
     pub host: String,
     #[structopt(long, default_value = "6379")]
     pub port: u32,
@@ -18,8 +22,8 @@ pub struct RedisConfig {
 }
 
 impl RedisConfig {
-    pub fn get_replica_of(self) -> Option<(String, usize)> {
-        match self.replicaof {
+    pub fn get_replica_of(&self) -> Option<(String, usize)> {
+        match &self.replicaof {
             Some(args) => {
                 let host = args[0].to_string();
                 let port = args[1].parse().unwrap();
@@ -30,11 +34,10 @@ impl RedisConfig {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ClientHandler {
-    pub id: String,
+#[derive(Debug)]
+pub struct ClientChannel {
     pub writer: Arc<RwLock<Sender<RedisValue>>>,
-    pub reader: Arc<RwLock<Receiver<RedisValue>>>,
+    pub reader: Arc<Mutex<Receiver<RedisValue>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,9 +52,8 @@ pub struct Redis {
 
     pub store: Arc<RwLock<HashMap<String, StoreItem>>>,
 
-    pub clients: Arc<RwLock<Vec<TcpStream>>>,
-    pub handlers: Arc<RwLock<HashMap<String, ClientHandler>>>,
-
+    pub clients: Arc<RwLock<HashMap<String, Arc<RwLock<TcpStream>>>>>,
+    pub channels: Arc<RwLock<HashMap<String, Arc<RwLock<ClientChannel>>>>>,
     pub replicas: Arc<RwLock<HashSet<String>>>,
 }
 
@@ -62,8 +64,8 @@ impl Redis {
             config: config.clone(),
             store: Arc::new(RwLock::new(HashMap::new())),
 
-            clients: Arc::new(RwLock::new(Vec::new())),
-            handlers: Arc::new(RwLock::new(HashMap::new())),
+            clients: Arc::new(RwLock::new(HashMap::new())),
+            channels: Arc::new(RwLock::new(HashMap::new())),
             replicas: Arc::new(RwLock::new(HashSet::new())),
         }
     }

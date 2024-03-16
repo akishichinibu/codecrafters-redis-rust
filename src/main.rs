@@ -7,18 +7,19 @@ mod utilities;
 mod value;
 mod worker;
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task;
 
 use client::client_process;
 use worker::worker_process;
 
-use crate::redis::{ClientHandler, Redis};
+use crate::redis::{ClientChannel, Redis};
 
-use crate::replica::handle_replica_handshake;
+use crate::replica::{handle_replica_handshake, listen_to_master_progate};
 use crate::value::RedisValue;
 use crate::worker::WorkerMessage;
 
@@ -31,31 +32,51 @@ pub async fn launch(redis: Redis) {
     let worker = task::spawn(worker_process(redis.clone(), worker_receiver));
 
     // handle handshake for replica
-    if let Some(r) = redis.config.get_replica_of() {
-        task::spawn(handle_replica_handshake(redis, worker_sender));
-    }
+    let replica_handler = if let Some(_) = redis.config.get_replica_of() {
+        println!("current node is a replica node, try to handshake");
+        let connection = handle_replica_handshake(redis.clone()).await.unwrap();
+        println!("handshake success, launch progate thread");
+
+        Some(task::spawn(listen_to_master_progate(
+            redis.clone(),
+            connection,
+            worker_sender.clone(),
+        )))
+    } else {
+        None
+    };
 
     loop {
         match listener.accept().await {
             Ok((client, addr)) => {
-                println!("accepted connection from {:?}", addr);
-                let client_id = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb".to_string();
-                let (client_sender, client_receiver) = mpsc::channel::<RedisValue>(128);
+                let client_id = {
+                    let mut hasher = DefaultHasher::new();
+                    addr.hash(&mut hasher);
+                    hasher.finish().to_string()
+                };
+                println!("accepted connection from {:?}, id: {}", addr, client_id);
+                println!("1");
                 {
-                    let client_handler = ClientHandler {
-                        id: client_id,
-                        writer: Arc::new(RwLock::new(client_sender)),
-                        reader: Arc::new(RwLock::new(client_receiver)),
-                    };
-                    let mut handlers = redis.handlers.write().await;
-                    handlers.insert(client_id, client_handler);
+                    let mut clients = redis.clients.write().await;
+                    clients.insert(client_id.clone(), Arc::new(RwLock::new(client)));
                 }
+                println!("2");
+                {
+                    let (client_sender, client_receiver) = mpsc::channel::<RedisValue>(128);
+                    let channel = ClientChannel {
+                        writer: Arc::new(RwLock::new(client_sender)),
+                        reader: Arc::new(Mutex::new(client_receiver)),
+                    };
+                    let mut channels = redis.channels.write().await;
+                    channels.insert(client_id.clone(), Arc::new(RwLock::new(channel)));
+                    drop(channels);
+                }
+                println!("3");
                 // launch client processor
+                println!("client processor for id {} launched", client_id);
                 task::spawn(client_process(
                     redis.clone(),
-                    client,
-                    client_receiver,
-                    client_sender,
+                    client_id.clone(),
                     worker_sender.clone(),
                 ));
             }
@@ -65,6 +86,12 @@ pub async fn launch(redis: Redis) {
                 break;
             }
         }
+        task::yield_now().await;
+    }
+
+    if let Some(replica_handler) = replica_handler {
+        replica_handler.abort();
+        replica_handler.await;
     }
 
     worker.await.unwrap();
