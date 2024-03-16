@@ -18,9 +18,8 @@ pub struct WorkerMessage {
     pub responser: Option<Arc<RwLock<Sender<RedisValue>>>>,
 }
 
-pub async fn worker_process(redis: Redis, receiver: Receiver<WorkerMessage>) {
+pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>) {
     println!("[worker] process launched; {}", redis.host());
-    let mut receiver = receiver;
 
     loop {
         let message = if let Some(v) = receiver.recv().await {
@@ -35,7 +34,7 @@ pub async fn worker_process(redis: Redis, receiver: Receiver<WorkerMessage>) {
             RedisCommand::Ping => vec![RedisValue::simple_string("PONG")],
             RedisCommand::Echo(value) => vec![RedisValue::BulkString(Some(value))],
             RedisCommand::Get(key) => {
-                let key = String::from_utf8(key.data.to_vec()).unwrap();
+                let key: String = (&key).into();
                 let store = redis.store.read().await;
                 println!("[worker] store: {:?}", store);
                 match store.get(&key) {
@@ -60,7 +59,20 @@ pub async fn worker_process(redis: Redis, receiver: Receiver<WorkerMessage>) {
                 replica_id: message.client_id.unwrap(),
             }
             .into()],
-            RedisCommand::Replconf(_, _) => vec![RedisValue::simple_string("OK")],
+            RedisCommand::Replconf(v1, v2) => {
+                let key: String = (&v1).into();
+                let key = key.to_lowercase();
+                match key.as_str() {
+                    "getack" => {
+                        vec![RedisValue::Array(vec![
+                            RedisValue::bulk_string("replconf"),
+                            RedisValue::bulk_string("ack"),
+                            RedisValue::bulk_string("0"),
+                        ])]
+                    }
+                    _ => vec![RedisValue::simple_string("OK")],
+                }
+            }
             RedisCommand::Psync(_, _) => {
                 let id = message.client_id.unwrap();
                 let response = format!("FULLRESYNC {} 0", id);
@@ -96,7 +108,12 @@ pub async fn worker_process(redis: Redis, receiver: Receiver<WorkerMessage>) {
                 vec![RedisValue::simple_string("OK")]
             }
         };
+        println!("[worker] done. response: {:?}", response);
         if let Some(responser) = message.responser {
+            println!(
+                "[worker] has a responser, send response back {:?}",
+                response
+            );
             for r in response {
                 let res = responser.read().await;
                 res.send(r).await.unwrap();

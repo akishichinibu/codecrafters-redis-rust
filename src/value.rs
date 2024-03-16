@@ -17,6 +17,12 @@ impl Into<RedisBulkString> for &str {
     }
 }
 
+impl Into<String> for &RedisBulkString {
+    fn into(self) -> String {
+        String::from_utf8(self.data.to_owned()).unwrap()
+    }
+}
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum RedisValue {
     SimpleString(String),

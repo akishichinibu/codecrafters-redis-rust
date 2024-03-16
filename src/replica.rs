@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::command::{RedisCommand, RedisTcpStreamReadExt, RedisTcpStreamWriteExt};
 use crate::parser::RedisValueParser;
 use crate::redis::Redis;
@@ -5,7 +7,8 @@ use crate::value::RedisValue;
 use crate::worker::WorkerMessage;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::RwLock;
 
 pub struct ReplicationInfo {
     pub role: String,
@@ -81,7 +84,8 @@ pub async fn listen_to_master_progate(
     worker_sender: Sender<WorkerMessage>,
 ) -> Result<(), std::io::Error> {
     println!("[replica progate] start to listen to master node");
-    let (mut reader, _) = connection;
+    let (mut reader, mut writer) = connection;
+    let (sender, mut receiver) = mpsc::channel::<RedisValue>(8);
 
     loop {
         let command = match reader.read_command(&mut parser).await {
@@ -94,13 +98,32 @@ pub async fn listen_to_master_progate(
         );
 
         if let Some(command) = command {
+            let responser = match command.clone() {
+                RedisCommand::Replconf(k, _) => {
+                    let key: String = (&k).into();
+                    let key = key.to_lowercase();
+                    match key.as_str() {
+                        "getack" => Some(sender.clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+
             let message = WorkerMessage {
                 command: command.clone(),
                 client_id: None,
-                responser: None,
+                responser: responser.clone().map(|r| Arc::new(RwLock::new(r))),
             };
             worker_sender.send(message).await.unwrap();
             println!("[replica] send command to replica worker: {:?}", command);
+
+            if responser.is_some() {
+                println!("[replica] replica has a responser, try to receive");
+                if let Some(response) = receiver.recv().await {
+                    writer.write_value(&response).await.unwrap();
+                }
+            }
         }
     }
 }
