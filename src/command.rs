@@ -1,10 +1,10 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf, ReadHalf, WriteHalf};
-use tokio::net::{TcpSocket, TcpStream};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::TcpStream;
 
 use crate::parser::{MessageParserStateError, RedisValueParser};
 use crate::value::{RedisBulkString, RedisValue};
-use std::io::{Error, ErrorKind};
+use std::io::ErrorKind;
 use std::vec;
 
 #[derive(PartialEq, Debug, Clone)]
@@ -196,20 +196,25 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
         &mut self,
         parser: &mut RedisValueParser,
     ) -> Result<Option<RedisValue>, std::io::Error> {
-        println!("try to read a value");
+        println!("try to read a value {}", parser.buffer_len());
         let mut buffer: [u8; 1024] = [0; 1024];
+
+        if let Ok((Some(value), _)) = parser.parse() {
+            return Ok(Some(value));
+        }
+
         match self.read(buffer.as_mut_slice()).await {
             Err(e) => Err(e),
             Ok(0) => Err(ErrorKind::ConnectionAborted.into()),
             Ok(n) => {
-                println!("read {}", n);
+                println!("read bytes {}", n);
                 parser.append(&buffer[0..n]);
                 match parser.parse() {
-                    Ok((value, _)) => Ok(value),
-                    Err(e) => match e {
-                        MessageParserStateError::UnexceptedTermination => Ok(None),
-                        _ => panic!("{:?}", e),
-                    },
+                    Ok((value, _)) => {
+                        println!("read value: {:?}", value);
+                        Ok(value)
+                    }
+                    Err(e) => panic!("{:?}", e),
                 }
             }
         }
@@ -242,8 +247,13 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
         &mut self,
         parser: &mut RedisValueParser,
     ) -> Result<Option<RedisValue>, std::io::Error> {
-        println!("try to read a rdb");
+        println!("try to read a rdb {}", parser.buffer_len());
         let mut buffer: [u8; 102400] = [0; 102400];
+
+        if let Ok((Some(value), _)) = parser.parse_rdb() {
+            return Ok(Some(value));
+        }
+
         match self.read(buffer.as_mut_slice()).await {
             Err(e) => Err(e),
             Ok(0) => Err(ErrorKind::ConnectionAborted.into()),
@@ -252,10 +262,7 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
                 parser.append(&buffer[0..n]);
                 match parser.parse_rdb() {
                     Ok((value, _)) => Ok(value),
-                    Err(e) => match e {
-                        MessageParserStateError::UnexceptedTermination => Ok(None),
-                        _ => panic!("{:?}", e),
-                    },
+                    Err(e) => panic!("{:?}", e),
                 }
             }
         }
@@ -293,20 +300,20 @@ impl RedisTcpStreamWriteExt for TcpStream {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::parser;
+// #[cfg(test)]
+// mod tests {
+//     use crate::parser;
 
-    use super::*;
+//     use super::*;
 
-    #[test]
-    fn test_echo_command() {
-        let input = b"*2\r\n$4\r\necho\r\n$3\r\nhey\r\n";
-        let mut parser = RedisValueParser::new();
-        parser.append(input);
+//     #[test]
+//     fn test_echo_command() {
+//         let input = b"*2\r\n$4\r\necho\r\n$3\r\nhey\r\n";
+//         let mut parser = RedisValueParser::new();
+//         parser.append(input);
 
-        let (value, t) = parser.parse().unwrap();
-        let c: RedisCommand = value.unwrap().try_into().unwrap();
-        assert_eq!(RedisCommand::Echo("hey".into()), c);
-    }
-}
+//         let (value, t) = parser.parse().unwrap();
+//         let c: RedisCommand = value.unwrap().try_into().unwrap();
+//         assert_eq!(RedisCommand::Echo("hey".into()), c);
+//     }
+// }

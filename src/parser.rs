@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, slice::Iter};
+use std::collections::VecDeque;
 
 use crate::value::RedisValue;
 
@@ -37,7 +37,6 @@ enum MessageParserState {
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum MessageParserStateError {
-    UnexceptedTermination,
     UnexceptedToken(u8, usize, u32),
     UnexceptedValue(String),
 }
@@ -88,16 +87,12 @@ impl RedisValueParser {
         }
     }
 
-    // fn push_states_in_reverse<T: Into<Vec<MessageParserState>>>(&mut self, states: T) {
-    //     states
-    //         .into()
-    //         .iter()
-    //         .rev()
-    //         .for_each(|s| self.state_stack.push(s.to_owned()));
-    // }
-
     pub fn append(&mut self, input: &[u8]) {
         self.bytes_buffer.extend(input);
+    }
+
+    pub fn buffer_len(&self) -> usize {
+        self.bytes_buffer.len()
     }
 
     fn parse_loop(&mut self) -> Result<(Option<RedisValue>, usize), MessageParserStateError> {
@@ -111,10 +106,10 @@ impl RedisValueParser {
                 break;
             };
 
-            println!(
-                "* ; state: {:?}; stack: {:?}; buffer: {:?}",
-                state, self.state_stack, self.value_buffer
-            );
+            // println!(
+            //     "* ; state: {:?}; stack: {:?}; buffer: {:?}",
+            //     state, self.state_stack, self.value_buffer
+            // );
             match state {
                 MessageParserState::Initial => match input.next() {
                     Some((t, b'$')) => {
@@ -236,7 +231,7 @@ impl RedisValueParser {
                                 self.state_stack
                                     .push(MessageParserState::ReadingRdb { length, content });
                             } else {
-                                let s = RedisValue::bulk_string_from_bytes(content.as_slice());
+                                let s = RedisValue::Rdb(content.to_vec());
                                 self.value_buffer.push(s);
                             }
                         }
@@ -417,7 +412,7 @@ mod tests {
         let mut parser = RedisValueParser::new();
         parser.append(input);
 
-        let (values, t) = parser.parse().unwrap();
+        let (values, _) = parser.parse().unwrap();
 
         match values {
             Some(RedisValue::Array(s)) => {

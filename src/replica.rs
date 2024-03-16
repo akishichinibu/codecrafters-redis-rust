@@ -75,7 +75,7 @@ pub async fn handle_replica_handshake(
 
 // read the command from master node and send them to the worker node
 pub async fn listen_to_master_progate(
-    redis: Redis,
+    _redis: Redis,
     connection: (OwnedReadHalf, OwnedWriteHalf),
     worker_sender: Sender<WorkerMessage>,
 ) -> Result<(), std::io::Error> {

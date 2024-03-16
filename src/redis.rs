@@ -1,15 +1,9 @@
 use crate::client::ClientChannel;
 use crate::value::RedisValue;
-use base64::read;
-use std::borrow::BorrowMut;
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use structopt::StructOpt;
-use tokio::net::tcp::{ReadHalf, WriteHalf};
-use tokio::net::TcpStream;
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(name = "redis")]

@@ -1,4 +1,3 @@
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use command::RedisCommand;
@@ -6,7 +5,6 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::RwLock;
 use tokio::task;
 
-use crate::command::RedisTcpStreamWriteExt;
 use crate::redis::{Redis, StoreItem};
 use crate::replica::ReplicationInfo;
 use crate::{command, utilities};
