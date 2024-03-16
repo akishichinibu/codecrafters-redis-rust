@@ -1,3 +1,4 @@
+use crate::client::ClientChannel;
 use crate::value::RedisValue;
 use base64::read;
 use std::borrow::BorrowMut;
@@ -34,12 +35,6 @@ impl RedisConfig {
     }
 }
 
-#[derive(Debug)]
-pub struct ClientChannel {
-    pub writer: Arc<RwLock<Sender<RedisValue>>>,
-    pub reader: Arc<Mutex<Receiver<RedisValue>>>,
-}
-
 #[derive(Debug, Clone)]
 pub struct StoreItem {
     pub value: RedisValue,
@@ -52,7 +47,7 @@ pub struct Redis {
 
     pub store: Arc<RwLock<HashMap<String, StoreItem>>>,
 
-    pub clients: Arc<RwLock<HashMap<String, Arc<RwLock<TcpStream>>>>>,
+    // pub clients: Arc<RwLock<HashMap<String, Arc<Mutex<TcpStream>>>>>,
     pub channels: Arc<RwLock<HashMap<String, Arc<RwLock<ClientChannel>>>>>,
     pub replicas: Arc<RwLock<HashSet<String>>>,
 }
@@ -64,7 +59,7 @@ impl Redis {
             config: config.clone(),
             store: Arc::new(RwLock::new(HashMap::new())),
 
-            clients: Arc::new(RwLock::new(HashMap::new())),
+            // clients: Arc::new(RwLock::new(HashMap::new())),
             channels: Arc::new(RwLock::new(HashMap::new())),
             replicas: Arc::new(RwLock::new(HashSet::new())),
         }

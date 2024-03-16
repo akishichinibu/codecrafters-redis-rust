@@ -1,5 +1,5 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::tcp::{ReadHalf, WriteHalf};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf, ReadHalf, WriteHalf};
 use tokio::net::{TcpSocket, TcpStream};
 
 use crate::parser::{MessageParserStateError, RedisValueParser};
@@ -185,9 +185,13 @@ pub trait RedisTcpStreamReadExt {
         &mut self,
         parser: &mut RedisValueParser,
     ) -> Result<Option<RedisCommand>, std::io::Error>;
+    async fn read_rdb(
+        &mut self,
+        parser: &mut RedisValueParser,
+    ) -> Result<Option<RedisValue>, std::io::Error>;
 }
 
-impl<'a> RedisTcpStreamReadExt for ReadHalf<'a> {
+impl RedisTcpStreamReadExt for OwnedReadHalf {
     async fn read_value(
         &mut self,
         parser: &mut RedisValueParser,
@@ -233,6 +237,29 @@ impl<'a> RedisTcpStreamReadExt for ReadHalf<'a> {
             _ => panic!(),
         }
     }
+
+    async fn read_rdb(
+        &mut self,
+        parser: &mut RedisValueParser,
+    ) -> Result<Option<RedisValue>, std::io::Error> {
+        println!("try to read a rdb");
+        let mut buffer: [u8; 102400] = [0; 102400];
+        match self.read(buffer.as_mut_slice()).await {
+            Err(e) => Err(e),
+            Ok(0) => Err(ErrorKind::ConnectionAborted.into()),
+            Ok(n) => {
+                println!("read {}", n);
+                parser.append(&buffer[0..n]);
+                match parser.parse_rdb() {
+                    Ok((value, _)) => Ok(value),
+                    Err(e) => match e {
+                        MessageParserStateError::UnexceptedTermination => Ok(None),
+                        _ => panic!("{:?}", e),
+                    },
+                }
+            }
+        }
+    }
 }
 
 pub trait RedisTcpStreamWriteExt {
@@ -240,7 +267,7 @@ pub trait RedisTcpStreamWriteExt {
     async fn write_command(&mut self, commmand: &RedisCommand) -> Result<(), std::io::Error>;
 }
 
-impl<'a> RedisTcpStreamWriteExt for WriteHalf<'a> {
+impl RedisTcpStreamWriteExt for OwnedWriteHalf {
     async fn write_value(&mut self, value: &RedisValue) -> Result<(), std::io::Error> {
         let bytes: Vec<u8> = value.into();
         self.write_all(bytes.as_slice()).await
@@ -263,50 +290,6 @@ impl RedisTcpStreamWriteExt for TcpStream {
         let value: RedisValue = command.into();
         let bytes: Vec<u8> = (&value).into();
         self.write_all(bytes.as_slice()).await
-    }
-}
-
-impl RedisTcpStreamReadExt for TcpStream {
-    async fn read_value(
-        &mut self,
-        parser: &mut RedisValueParser,
-    ) -> Result<Option<RedisValue>, std::io::Error> {
-        let mut buffer: [u8; 1024] = [0; 1024];
-        match self.read(buffer.as_mut_slice()).await {
-            Ok(0) => Ok(None),
-            Ok(n) => {
-                println!("read {}", n);
-                parser.append(&buffer[0..n]);
-                match parser.parse() {
-                    Ok((value, _)) => Ok(value),
-                    Err(e) => panic!("{:?}", e),
-                }
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    async fn read_command(
-        &mut self,
-        parser: &mut RedisValueParser,
-    ) -> Result<Option<RedisCommand>, std::io::Error> {
-        let value = match self.read_value(parser).await {
-            Ok(value) => value,
-            Err(e) => return Err(e),
-        };
-        let value = if let Some(value) = value {
-            value
-        } else {
-            return Ok(None);
-        };
-        match value {
-            RedisValue::Array(a) => {
-                let command: RedisCommand = RedisValue::Array(a).try_into().unwrap();
-                println!("received command: {:?}", command);
-                Ok(Some(command))
-            }
-            _ => panic!(),
-        }
     }
 }
 

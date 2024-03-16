@@ -17,7 +17,8 @@ use tokio::task;
 use client::client_process;
 use worker::worker_process;
 
-use crate::redis::{ClientChannel, Redis};
+use crate::client::ClientChannel;
+use crate::redis::Redis;
 
 use crate::replica::{handle_replica_handshake, listen_to_master_progate};
 use crate::value::RedisValue;
@@ -56,19 +57,17 @@ pub async fn launch(redis: Redis) {
                 };
                 println!("accepted connection from {:?}, id: {}", addr, client_id);
                 println!("1");
-                {
-                    let mut clients = redis.clients.write().await;
-                    clients.insert(client_id.clone(), Arc::new(RwLock::new(client)));
-                }
+                // {
+                //     let mut clients = redis.clients.write().await;
+                //     clients.insert(client_id.clone(), Arc::new(RwLock::new(client)));
+                // }
                 println!("2");
                 {
-                    let (client_sender, client_receiver) = mpsc::channel::<RedisValue>(128);
-                    let channel = ClientChannel {
-                        writer: Arc::new(RwLock::new(client_sender)),
-                        reader: Arc::new(Mutex::new(client_receiver)),
-                    };
                     let mut channels = redis.channels.write().await;
-                    channels.insert(client_id.clone(), Arc::new(RwLock::new(channel)));
+                    channels.insert(
+                        client_id.clone(),
+                        Arc::new(RwLock::new(ClientChannel::new())),
+                    );
                     drop(channels);
                 }
                 println!("3");
@@ -77,6 +76,7 @@ pub async fn launch(redis: Redis) {
                 task::spawn(client_process(
                     redis.clone(),
                     client_id.clone(),
+                    client,
                     worker_sender.clone(),
                 ));
             }

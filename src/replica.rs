@@ -3,6 +3,7 @@ use crate::parser::RedisValueParser;
 use crate::redis::Redis;
 use crate::value::RedisValue;
 use crate::worker::WorkerMessage;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Sender;
 
@@ -21,7 +22,9 @@ impl<'a> Into<RedisValue> for ReplicationInfo {
     }
 }
 
-pub async fn handle_replica_handshake(redis: Redis) -> Result<TcpStream, std::io::Error> {
+pub async fn handle_replica_handshake(
+    redis: Redis,
+) -> Result<(OwnedReadHalf, OwnedWriteHalf), std::io::Error> {
     let (master_host, master_port) = if let Some(c) = redis.clone().config.get_replica_of() {
         c
     } else {
@@ -30,12 +33,12 @@ pub async fn handle_replica_handshake(redis: Redis) -> Result<TcpStream, std::io
 
     let master_url = format!("{}:{}", master_host, master_port);
 
-    let mut connection = match TcpStream::connect(&master_url).await {
+    let connection = match TcpStream::connect(&master_url).await {
         Ok(c) => c,
         Err(e) => return Err(e),
     };
 
-    let (mut reader, mut writer) = connection.split();
+    let (mut reader, mut writer) = connection.into_split();
     let mut parser = RedisValueParser::new();
 
     println!("connection to master {} success", master_url);
@@ -66,19 +69,19 @@ pub async fn handle_replica_handshake(redis: Redis) -> Result<TcpStream, std::io
         .unwrap();
 
     reader.read_value(&mut parser).await.unwrap();
-    // connection.read_rdb().unwrap_or(RedisValue::Rdb(Vec::new()));
-    Ok(connection)
+    reader.read_rdb(&mut parser).await.unwrap();
+    Ok((reader, writer))
 }
 
 // read the command from master node and send them to the worker node
 pub async fn listen_to_master_progate(
     redis: Redis,
-    mut connection: TcpStream,
+    connection: (OwnedReadHalf, OwnedWriteHalf),
     worker_sender: Sender<WorkerMessage>,
 ) -> Result<(), std::io::Error> {
     println!("start to listen to master node");
     let mut parser = RedisValueParser::new();
-    let (mut reader, _) = connection.split();
+    let (mut reader, _) = connection;
 
     loop {
         let command = match reader.read_command(&mut parser).await {

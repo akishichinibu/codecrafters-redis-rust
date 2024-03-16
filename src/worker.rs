@@ -97,7 +97,7 @@ pub async fn worker_process(redis: Redis, receiver: Receiver<WorkerMessage>) {
         if let Some(responser) = message.responser {
             for r in response {
                 let res = responser.read().await;
-                res.send(r).await.unwrap()
+                res.send(r).await.unwrap();
             }
         }
         task::yield_now().await;
@@ -118,13 +118,12 @@ pub async fn brocast_to_replicas(redis: Redis, command: RedisCommand) -> Result<
             let channel = channels.get(id).unwrap();
             channel.clone()
         };
-        let writer = {
+        let to_client_sender = {
             let channel = channel.read().await;
-            let writer = channel.writer.read().await;
+            let writer = channel.to_client_sender.read().await;
             writer.clone()
         };
-        let value: RedisValue = (&command.clone()).into();
-        writer.send(value).await.unwrap();
+        to_client_sender.send((&command).into()).await.unwrap();
         println!("broadcast to client {} done, {:?}", id, command);
     }
 
