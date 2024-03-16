@@ -1,4 +1,3 @@
-use core::num;
 use std::sync::Arc;
 
 use command::RedisCommand;
@@ -110,7 +109,21 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
                 vec![RedisValue::simple_string("OK")]
             }
             RedisCommand::Wait(number, timeout) => {
-                vec![RedisValue::Integer(number as usize)]
+                let started_at = utilities::now();
+                loop {
+                    let replica_number = {
+                        let replicas = redis.replicas.read().await;
+                        replicas.len() as u64
+                    };
+                    if replica_number >= number || utilities::now() - started_at > timeout {
+                        break;
+                    }
+                }
+                let replica_number = {
+                    let replicas = redis.replicas.read().await;
+                    replicas.len() as u64
+                };
+                vec![RedisValue::Integer(replica_number as usize)]
             }
         };
         println!("[worker] done. response: {:?}", response);
