@@ -86,15 +86,16 @@ pub async fn listen_to_master_progate(
     println!("[replica progate] start to listen to master node");
     let (mut reader, mut writer) = connection;
     let (sender, mut receiver) = mpsc::channel::<RedisValue>(8);
+    let mut offset: usize = 0;
 
     loop {
-        let command = match reader.read_command(&mut parser).await {
+        let (command, length) = match reader.read_command(&mut parser).await {
             Ok(command) => command,
             Err(e) => return Err(e),
         };
         println!(
-            "[replica] receive a progate commmand from master: {:?}",
-            command
+            "[replica] receive a progate commmand ({}) from master, offset: {}: {:?}",
+            length, offset, command
         );
 
         if let Some(command) = command {
@@ -114,6 +115,7 @@ pub async fn listen_to_master_progate(
                 command: command.clone(),
                 client_id: None,
                 responser: responser.clone().map(|r| Arc::new(RwLock::new(r))),
+                offset,
             };
             worker_sender.send(message).await.unwrap();
             println!("[replica] send command to replica worker: {:?}", command);
@@ -125,5 +127,7 @@ pub async fn listen_to_master_progate(
                 }
             }
         }
+
+        offset += length;
     }
 }

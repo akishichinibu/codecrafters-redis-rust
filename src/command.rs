@@ -200,15 +200,15 @@ pub trait RedisTcpStreamReadExt {
     async fn read_value(
         &mut self,
         parser: &mut RedisValueParser,
-    ) -> Result<Option<RedisValue>, std::io::Error>;
+    ) -> Result<(Option<RedisValue>, usize), std::io::Error>;
     async fn read_command(
         &mut self,
         parser: &mut RedisValueParser,
-    ) -> Result<Option<RedisCommand>, std::io::Error>;
+    ) -> Result<(Option<RedisCommand>, usize), std::io::Error>;
     async fn read_rdb(
         &mut self,
         parser: &mut RedisValueParser,
-    ) -> Result<Option<RedisValue>, std::io::Error>;
+    ) -> Result<(Option<RedisValue>, usize), std::io::Error>;
 }
 
 #[async_trait]
@@ -216,12 +216,12 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
     async fn read_value(
         &mut self,
         parser: &mut RedisValueParser,
-    ) -> Result<Option<RedisValue>, std::io::Error> {
+    ) -> Result<(Option<RedisValue>, usize), std::io::Error> {
         println!("[read_value] try to read a value {}", parser.buffer_len());
         let mut buffer: [u8; 1024] = [0; 1024];
 
-        if let Ok((Some(value), _)) = parser.parse() {
-            return Ok(Some(value));
+        if let Ok((Some(value), offset)) = parser.parse() {
+            return Ok((Some(value), offset + 1));
         }
 
         match self.read(buffer.as_mut_slice()).await {
@@ -231,9 +231,9 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
                 println!("[read_value] read bytes {}", n);
                 parser.append(&buffer[0..n]);
                 match parser.parse() {
-                    Ok((value, _)) => {
+                    Ok((value, offset)) => {
                         println!("read value: {:?}", value);
-                        Ok(value)
+                        Ok((value, offset + 1))
                     }
                     Err(e) => panic!("{:?}", e),
                 }
@@ -244,21 +244,21 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
     async fn read_command(
         &mut self,
         parser: &mut RedisValueParser,
-    ) -> Result<Option<RedisCommand>, std::io::Error> {
-        let value = match self.read_value(parser).await {
-            Ok(value) => value,
+    ) -> Result<(Option<RedisCommand>, usize), std::io::Error> {
+        let (value, length) = match self.read_value(parser).await {
+            Ok(v) => v,
             Err(e) => return Err(e),
         };
         let value = if let Some(value) = value {
             value
         } else {
-            return Ok(None);
+            return Ok((None, length));
         };
         match value {
             RedisValue::Array(a) => {
                 let command: RedisCommand = RedisValue::Array(a).try_into().unwrap();
-                println!("[read_command] received command: {:?}", command);
-                Ok(Some(command))
+                println!("[read_command] received command({}): {:?}", length, command);
+                Ok((Some(command), length))
             }
             _ => panic!(),
         }
@@ -267,22 +267,26 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
     async fn read_rdb(
         &mut self,
         parser: &mut RedisValueParser,
-    ) -> Result<Option<RedisValue>, std::io::Error> {
+    ) -> Result<(Option<RedisValue>, usize), std::io::Error> {
         println!("try to read a rdb {}", parser.buffer_len());
         let mut buffer: [u8; 102400] = [0; 102400];
 
-        if let Ok((Some(value), _)) = parser.parse_rdb() {
-            return Ok(Some(value));
+        if let Ok((Some(value), offset)) = parser.parse_rdb() {
+            return Ok((Some(value), offset + 1));
         }
 
         match self.read(buffer.as_mut_slice()).await {
             Err(e) => Err(e),
             Ok(0) => Err(ErrorKind::ConnectionAborted.into()),
             Ok(n) => {
-                println!("read {}", n);
+                println!("[read_value] read bytes {}", n);
                 parser.append(&buffer[0..n]);
                 match parser.parse_rdb() {
-                    Ok((value, _)) => Ok(value),
+                    Ok((v, offset)) => {
+                        let length = offset + 1;
+                        println!("[read_command] received rdb({})", length);
+                        Ok((v, length))
+                    }
                     Err(e) => panic!("{:?}", e),
                 }
             }

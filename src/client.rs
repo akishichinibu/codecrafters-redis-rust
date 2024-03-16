@@ -55,10 +55,10 @@ pub async fn client_process(
         loop {
             let from_client = reader.read_command(&mut parser).await;
             match from_client {
-                Ok(None) => {
+                Ok((None, _)) => {
                     break;
                 }
-                Ok(Some(command)) => {
+                Ok((Some(command), _)) => {
                     let channel = {
                         let channels = _redis.channels.read().await;
                         channels.get(&_client_id).unwrap().clone()
@@ -131,6 +131,7 @@ pub async fn client_process(
                     command: value.try_into().unwrap(),
                     client_id: Some(client_id.clone()),
                     responser: Some(channel.read().await.to_client_sender.clone()),
+                    offset: 0,
                 })
                 .await
                 .unwrap();

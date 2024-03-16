@@ -16,6 +16,7 @@ pub struct WorkerMessage {
     pub command: RedisCommand,
     pub client_id: Option<String>,
     pub responser: Option<Arc<RwLock<Sender<RedisValue>>>>,
+    pub offset: usize,
 }
 
 pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>) {
@@ -67,7 +68,7 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
                         vec![RedisValue::Array(vec![
                             RedisValue::bulk_string("replconf"),
                             RedisValue::bulk_string("ack"),
-                            RedisValue::bulk_string("0"),
+                            RedisValue::bulk_string(message.offset.to_string().as_str()),
                         ])]
                     }
                     _ => vec![RedisValue::simple_string("OK")],
