@@ -30,6 +30,7 @@ pub enum RedisValue {
     Array(Vec<RedisValue>),
     Integer(usize),
     Rdb(Vec<u8>),
+    Bytes(Vec<u8>),
 }
 
 impl RedisValue {
@@ -86,7 +87,15 @@ impl Into<Vec<u8>> for &RedisValue {
                 buffer.extend_from_slice(CRLF);
                 buffer.extend_from_slice(&c);
             }
-            RedisValue::Integer(i) => buffer.extend_from_slice(i.to_string().as_bytes()),
+            RedisValue::Integer(i) => {
+                buffer.push(b':');
+                buffer.extend_from_slice(i.to_string().as_bytes());
+                buffer.extend_from_slice(CRLF);
+            }
+            RedisValue::Bytes(b) => {
+                buffer.extend_from_slice(b);
+                buffer.extend_from_slice(CRLF);
+            }
         }
         buffer
     }

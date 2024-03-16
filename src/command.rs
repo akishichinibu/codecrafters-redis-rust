@@ -4,6 +4,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::parser::{MessageParserStateError, RedisValueParser};
 use crate::value::{RedisBulkString, RedisValue};
+use core::num;
 use std::io::ErrorKind;
 use std::vec;
 
@@ -16,6 +17,7 @@ pub enum RedisCommand {
     Replconf(RedisBulkString, RedisBulkString),
     Info(RedisBulkString),
     Psync(RedisBulkString, RedisBulkString),
+    Wait(u64, u64),
 }
 
 impl RedisCommand {
@@ -68,6 +70,11 @@ impl Into<RedisValue> for &RedisCommand {
                 RedisValue::bulk_string("psync"),
                 RedisValue::BulkString(Some(id.clone())),
                 RedisValue::BulkString(Some(offset.clone())),
+            ],
+            RedisCommand::Wait(number, timeout) => vec![
+                RedisValue::bulk_string("wait"),
+                RedisValue::bulk_string(number.to_string().as_str()),
+                RedisValue::bulk_string(timeout.to_string().as_str()),
             ],
         }
         .into()
@@ -186,6 +193,22 @@ impl TryInto<RedisCommand> for RedisValue {
                     };
 
                     RedisCommand::Psync(arg1.to_owned(), arg2.to_owned())
+                }
+                _ => return Err(RedisCommandError::DismatchedArgsNum),
+            },
+            "wait" => match args.len() {
+                2 => {
+                    let number: String = match &args[0] {
+                        RedisValue::BulkString(Some(s)) => s.into(),
+                        _ => return Err(RedisCommandError::NilArg),
+                    };
+                    let number: u64 = number.parse().unwrap();
+                    let timeout: String = match &args[1] {
+                        RedisValue::BulkString(Some(s)) => s.into(),
+                        _ => return Err(RedisCommandError::NilArg),
+                    };
+                    let timeout: u64 = timeout.parse().unwrap();
+                    RedisCommand::Wait(number, timeout)
                 }
                 _ => return Err(RedisCommandError::DismatchedArgsNum),
             },
