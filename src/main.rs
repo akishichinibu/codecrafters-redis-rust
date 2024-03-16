@@ -7,7 +7,9 @@ mod utilities;
 mod value;
 mod worker;
 
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::iter::repeat;
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
@@ -34,12 +36,13 @@ pub async fn launch(redis: Redis) {
     // handle handshake for replica
     let replica_handler = if let Some(_) = redis.config.get_replica_of() {
         println!("current node is a replica node, try to handshake");
-        let connection = handle_replica_handshake(redis.clone()).await.unwrap();
+        let (connection, parser) = handle_replica_handshake(redis.clone()).await.unwrap();
         println!("handshake success, launch progate thread");
 
         Some(task::spawn(listen_to_master_progate(
             redis.clone(),
             connection,
+            parser,
             worker_sender.clone(),
         )))
     } else {
@@ -52,9 +55,18 @@ pub async fn launch(redis: Redis) {
                 let client_id = {
                     let mut hasher = DefaultHasher::new();
                     addr.hash(&mut hasher);
-                    hasher.finish().to_string()
+                    let id = hasher.finish().to_string();
+                    if id.len() < 40 {
+                        let padding: String = repeat('0').take(40 - id.len()).collect();
+                        id + &padding
+                    } else {
+                        id.as_str()[..40].into()
+                    }
                 };
-                println!("accepted connection from {:?}, id: {}", addr, client_id);
+                println!(
+                    "[main] accepted connection from {:?}, id: {}",
+                    addr, client_id
+                );
 
                 {
                     let mut channels = redis.channels.write().await;
@@ -65,7 +77,7 @@ pub async fn launch(redis: Redis) {
                 }
 
                 // launch client processor
-                println!("client processor for id {} launched", client_id);
+                println!("[main] client {} processor launched", client_id);
                 task::spawn(client_process(
                     redis.clone(),
                     client_id.clone(),

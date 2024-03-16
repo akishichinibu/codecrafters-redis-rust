@@ -24,7 +24,7 @@ impl<'a> Into<RedisValue> for ReplicationInfo {
 
 pub async fn handle_replica_handshake(
     redis: Redis,
-) -> Result<(OwnedReadHalf, OwnedWriteHalf), std::io::Error> {
+) -> Result<((OwnedReadHalf, OwnedWriteHalf), RedisValueParser), std::io::Error> {
     let (master_host, master_port) = if let Some(c) = redis.clone().config.get_replica_of() {
         c
     } else {
@@ -70,17 +70,17 @@ pub async fn handle_replica_handshake(
 
     reader.read_value(&mut parser).await.unwrap();
     reader.read_rdb(&mut parser).await.unwrap();
-    Ok((reader, writer))
+    Ok(((reader, writer), parser))
 }
 
 // read the command from master node and send them to the worker node
 pub async fn listen_to_master_progate(
     _redis: Redis,
     connection: (OwnedReadHalf, OwnedWriteHalf),
+    mut parser: RedisValueParser,
     worker_sender: Sender<WorkerMessage>,
 ) -> Result<(), std::io::Error> {
-    println!("start to listen to master node");
-    let mut parser = RedisValueParser::new();
+    println!("[replica progate] start to listen to master node");
     let (mut reader, _) = connection;
 
     loop {
@@ -88,15 +88,19 @@ pub async fn listen_to_master_progate(
             Ok(command) => command,
             Err(e) => return Err(e),
         };
-        println!("receive a progate commmand from master: {:?}", command);
+        println!(
+            "[replica] receive a progate commmand from master: {:?}",
+            command
+        );
 
         if let Some(command) = command {
             let message = WorkerMessage {
-                command,
+                command: command.clone(),
                 client_id: None,
                 responser: None,
             };
             worker_sender.send(message).await.unwrap();
+            println!("[replica] send command to replica worker: {:?}", command);
         }
     }
 }

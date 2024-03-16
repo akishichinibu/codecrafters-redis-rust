@@ -1,6 +1,6 @@
+use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::TcpStream;
 
 use crate::parser::{MessageParserStateError, RedisValueParser};
 use crate::value::{RedisBulkString, RedisValue};
@@ -14,7 +14,7 @@ pub enum RedisCommand {
     Get(RedisBulkString),
     Set(RedisBulkString, RedisBulkString, Option<u64>),
     Replconf(RedisBulkString, RedisBulkString),
-    Info,
+    Info(RedisBulkString),
     Psync(RedisBulkString, RedisBulkString),
 }
 
@@ -37,16 +37,26 @@ impl Into<RedisValue> for &RedisCommand {
                     RedisValue::BulkString(Some(v.clone())),
                 ]
             }
-            RedisCommand::Set(k, v, _) => vec![
-                RedisValue::bulk_string("set"),
-                RedisValue::BulkString(Some(k.clone())),
-                RedisValue::BulkString(Some(v.clone())),
-            ],
+            RedisCommand::Set(k, v, px) => {
+                let mut vs = vec![
+                    RedisValue::bulk_string("set"),
+                    RedisValue::BulkString(Some(k.clone())),
+                    RedisValue::BulkString(Some(v.clone())),
+                ];
+                if let Some(px) = px {
+                    vs.push(RedisValue::bulk_string("px"));
+                    vs.push(RedisValue::bulk_string(px.to_string().as_str()));
+                }
+                vs
+            }
             RedisCommand::Get(k) => vec![
                 RedisValue::bulk_string("get"),
                 RedisValue::BulkString(Some(k.clone())),
             ],
-            RedisCommand::Info => vec![RedisValue::null_bulk_string()],
+            RedisCommand::Info(v) => vec![
+                RedisValue::bulk_string("info"),
+                RedisValue::BulkString(Some(v.clone())),
+            ],
             RedisCommand::Replconf(k, v) => {
                 vec![
                     RedisValue::bulk_string("replconf"),
@@ -81,9 +91,12 @@ impl TryInto<RedisCommand> for RedisValue {
             RedisValue::Array(args) => args,
             _ => return Err(RedisCommandError::Malform("".to_string())),
         };
+        println!(
+            "[command] try to parse received value to command: {:?}",
+            args
+        );
 
         let (command, args) = args.split_first().unwrap();
-        println!("try to parse received: {:?} {:?}", command, args);
 
         let command_name = match command {
             RedisValue::BulkString(Some(s)) => String::from_utf8(s.data.clone()).unwrap(),
@@ -138,7 +151,13 @@ impl TryInto<RedisCommand> for RedisValue {
                 _ => return Err(RedisCommandError::DismatchedArgsNum),
             },
             "info" => match args.len() {
-                1 => RedisCommand::Info,
+                1 => {
+                    let v = match &args[0] {
+                        RedisValue::BulkString(Some(k)) => k.to_owned(),
+                        _ => return Err(RedisCommandError::NilArg),
+                    };
+                    RedisCommand::Info(v)
+                }
                 _ => return Err(RedisCommandError::DismatchedArgsNum),
             },
             "replconf" => match args.len() {
@@ -176,6 +195,7 @@ impl TryInto<RedisCommand> for RedisValue {
     }
 }
 
+#[async_trait]
 pub trait RedisTcpStreamReadExt {
     async fn read_value(
         &mut self,
@@ -191,12 +211,13 @@ pub trait RedisTcpStreamReadExt {
     ) -> Result<Option<RedisValue>, std::io::Error>;
 }
 
+#[async_trait]
 impl RedisTcpStreamReadExt for OwnedReadHalf {
     async fn read_value(
         &mut self,
         parser: &mut RedisValueParser,
     ) -> Result<Option<RedisValue>, std::io::Error> {
-        println!("try to read a value {}", parser.buffer_len());
+        println!("[read_value] try to read a value {}", parser.buffer_len());
         let mut buffer: [u8; 1024] = [0; 1024];
 
         if let Ok((Some(value), _)) = parser.parse() {
@@ -207,7 +228,7 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
             Err(e) => Err(e),
             Ok(0) => Err(ErrorKind::ConnectionAborted.into()),
             Ok(n) => {
-                println!("read bytes {}", n);
+                println!("[read_value] read bytes {}", n);
                 parser.append(&buffer[0..n]);
                 match parser.parse() {
                     Ok((value, _)) => {
@@ -236,7 +257,7 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
         match value {
             RedisValue::Array(a) => {
                 let command: RedisCommand = RedisValue::Array(a).try_into().unwrap();
-                println!("received command: {:?}", command);
+                println!("[read_command] received command: {:?}", command);
                 Ok(Some(command))
             }
             _ => panic!(),
@@ -269,25 +290,14 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
     }
 }
 
+#[async_trait]
 pub trait RedisTcpStreamWriteExt {
     async fn write_value(&mut self, value: &RedisValue) -> Result<(), std::io::Error>;
     async fn write_command(&mut self, commmand: &RedisCommand) -> Result<(), std::io::Error>;
 }
 
+#[async_trait]
 impl RedisTcpStreamWriteExt for OwnedWriteHalf {
-    async fn write_value(&mut self, value: &RedisValue) -> Result<(), std::io::Error> {
-        let bytes: Vec<u8> = value.into();
-        self.write_all(bytes.as_slice()).await
-    }
-
-    async fn write_command(&mut self, command: &RedisCommand) -> Result<(), std::io::Error> {
-        let value: RedisValue = command.into();
-        let bytes: Vec<u8> = (&value).into();
-        self.write_all(bytes.as_slice()).await
-    }
-}
-
-impl RedisTcpStreamWriteExt for TcpStream {
     async fn write_value(&mut self, value: &RedisValue) -> Result<(), std::io::Error> {
         let bytes: Vec<u8> = value.into();
         self.write_all(bytes.as_slice()).await

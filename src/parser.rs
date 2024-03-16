@@ -113,7 +113,10 @@ impl RedisValueParser {
             match state {
                 MessageParserState::Initial => match input.next() {
                     Some((t, b'$')) => {
-                        println!("{} {:?} {:?}: found an string", t, state, self.state_stack);
+                        println!(
+                            "[parser] {} {:?} {:?}: found an string",
+                            t, state, self.state_stack
+                        );
                         last_pos = t;
                         self.state_stack
                             .push(MessageParserState::ReadingBulkString {
@@ -122,7 +125,10 @@ impl RedisValueParser {
                             });
                     }
                     Some((t, b'*')) => {
-                        println!("{:?} {:?}: found an array", state, self.state_stack);
+                        println!(
+                            "[parser] {:?} {:?}: found an array",
+                            state, self.state_stack
+                        );
                         last_pos = t;
                         self.state_stack.push(MessageParserState::ReadingArray {
                             length: LengthState::Reading,
@@ -130,7 +136,10 @@ impl RedisValueParser {
                         });
                     }
                     Some((t, b'+')) => {
-                        println!("{:?} {:?}: found an simple string", state, self.state_stack);
+                        println!(
+                            "[parser] {:?} {:?}: found an simple string",
+                            state, self.state_stack
+                        );
                         last_pos = t;
                         self.state_stack
                             .push(MessageParserState::ReadingSimpleString {
@@ -367,13 +376,17 @@ impl RedisValueParser {
     }
 
     pub fn parse_rdb(&mut self) -> Result<(Option<RedisValue>, usize), MessageParserStateError> {
-        assert_eq!(Some(b'$'), self.bytes_buffer.front().copied());
-        self.bytes_buffer.pop_front().unwrap();
-        self.state_stack.push(MessageParserState::ReadingRdb {
-            length: LengthState::Reading,
-            content: Vec::new(),
-        });
-        self.parse_loop()
+        if let Some(first) = self.bytes_buffer.front() {
+            assert_eq!(b'$', *first);
+            self.bytes_buffer.pop_front().unwrap();
+            self.state_stack.push(MessageParserState::ReadingRdb {
+                length: LengthState::Reading,
+                content: Vec::new(),
+            });
+            self.parse_loop()
+        } else {
+            Ok((None, 0))
+        }
     }
 
     pub fn parse(&mut self) -> Result<(Option<RedisValue>, usize), MessageParserStateError> {
@@ -400,10 +413,8 @@ mod tests {
 
         let (values, t) = parser.parse().unwrap();
         assert_eq!(RedisValue::bulk_string("abcde"), values.unwrap());
-        // assert_eq!(
-        //     RedisValue::bulk_string("23223"),
-        //     parser.parse_bulk_string().unwrap()
-        // );
+
+        assert!(parser.parse().unwrap().0.is_none());
     }
 
     #[test]

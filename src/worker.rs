@@ -19,7 +19,7 @@ pub struct WorkerMessage {
 }
 
 pub async fn worker_process(redis: Redis, receiver: Receiver<WorkerMessage>) {
-    println!("worker process launched; {}", redis.host());
+    println!("[worker] process launched; {}", redis.host());
     let mut receiver = receiver;
 
     loop {
@@ -28,20 +28,23 @@ pub async fn worker_process(redis: Redis, receiver: Receiver<WorkerMessage>) {
         } else {
             continue;
         };
-        println!("worker messaged received: {:?}", message);
+        println!("[worker] messaged received: {:?}", message);
         let command: RedisCommand = message.command.clone();
 
         let response = match message.command {
             RedisCommand::Ping => vec![RedisValue::simple_string("PONG")],
             RedisCommand::Echo(value) => vec![RedisValue::BulkString(Some(value))],
             RedisCommand::Get(key) => {
-                let mut store = redis.store.write().await;
                 let key = String::from_utf8(key.data.to_vec()).unwrap();
+                let store = redis.store.read().await;
+                println!("[worker] store: {:?}", store);
                 match store.get(&key) {
                     Some(item) => {
                         if item.expired_at == 0 || item.expired_at >= utilities::now() {
                             vec![item.value.clone()]
                         } else {
+                            drop(store);
+                            let mut store = redis.store.write().await;
                             store.remove(&key);
                             vec![RedisValue::null_bulk_string()]
                         }
@@ -49,7 +52,7 @@ pub async fn worker_process(redis: Redis, receiver: Receiver<WorkerMessage>) {
                     None => vec![RedisValue::null_bulk_string()],
                 }
             }
-            RedisCommand::Info => vec![ReplicationInfo {
+            RedisCommand::Info(_) => vec![ReplicationInfo {
                 role: match redis.config.clone().get_replica_of() {
                     Some((_, _)) => "slave".to_string(),
                     None => "master".to_string(),
@@ -84,6 +87,7 @@ pub async fn worker_process(redis: Redis, receiver: Receiver<WorkerMessage>) {
                 {
                     let mut store = redis.store.write().await;
                     store.insert(key, StoreItem { value, expired_at });
+                    println!("[worker] store: {:?}", store);
                 }
                 // if current node is master node, broadcast the write commmand to all replicas
                 if redis.config.get_replica_of() == None {

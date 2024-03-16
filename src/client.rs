@@ -1,13 +1,12 @@
 use std::io::ErrorKind;
 use std::sync::Arc;
 
-use base64::write;
 use parser::RedisValueParser;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::{Mutex, RwLock};
-use tokio::{select, task};
+use tokio::task;
 
 use crate::command::{RedisTcpStreamReadExt, RedisTcpStreamWriteExt};
 use crate::parser;
@@ -44,33 +43,32 @@ pub async fn client_process(
     client: TcpStream,
     worker_sender: Sender<WorkerMessage>,
 ) {
-    println!("client process for {} started. ", client_id);
+    println!("[client: {}] process started. ", client_id);
     let (mut reader, mut writer) = client.into_split();
 
     // read from tcp stream and put the value into the channel
     let _redis = redis.clone();
     let _client_id = client_id.clone();
-    task::spawn(async move {
-        println!("Start to read from client {}", _client_id);
+    let read_from_client_task = task::spawn(async move {
+        println!("[client: {}] start to read from stream", _client_id);
         let mut parser = RedisValueParser::new();
         loop {
             let from_client = reader.read_command(&mut parser).await;
             match from_client {
-                Ok(command) => {
-                    if let Some(command) = command {
-                        let channel = {
-                            let channels = _redis.channels.read().await;
-                            channels.get(&_client_id).unwrap().clone()
-                        };
-                        let from_client_sender = {
-                            let channel = channel.read().await;
-                            channel._from_client_sender.clone()
-                        };
-                        let from_client_sender = from_client_sender.lock().await;
-                        from_client_sender.send((&command).into()).await.unwrap();
-                    } else {
-                        break;
-                    }
+                Ok(None) => {
+                    break;
+                }
+                Ok(Some(command)) => {
+                    let channel = {
+                        let channels = _redis.channels.read().await;
+                        channels.get(&_client_id).unwrap().clone()
+                    };
+                    let from_client_sender = {
+                        let channel = channel.read().await;
+                        channel._from_client_sender.clone()
+                    };
+                    let from_client_sender = from_client_sender.lock().await;
+                    from_client_sender.send((&command).into()).await.unwrap();
                 }
                 Err(e) => match e.kind() {
                     ErrorKind::ConnectionAborted => {
@@ -85,7 +83,7 @@ pub async fn client_process(
     // read from to_client_receiver channel and write the value to tcp stream
     let _redis = redis.clone();
     let _client_id = client_id.clone();
-    task::spawn(async move {
+    let write_to_client_task = task::spawn(async move {
         loop {
             let channel = {
                 let channels = _redis.channels.read().await;
@@ -100,11 +98,15 @@ pub async fn client_process(
             let response = if let Some(v) = response {
                 v
             } else {
+                to_client_receiver.close();
                 break;
             };
             writer.write_value(&response).await.unwrap();
             writer.flush().await.unwrap();
-            println!("value {:?} has been writed to clinet", response);
+            println!(
+                "[client: {}] value {:?} has been writed to client",
+                _client_id, response
+            );
         }
     });
 
@@ -132,11 +134,17 @@ pub async fn client_process(
                 })
                 .await
                 .unwrap();
+        } else {
+            break;
         }
     }
+    write_to_client_task.abort();
+    read_from_client_task.abort();
+    let _ = write_to_client_task.await;
+    let _ = read_from_client_task.await;
     {
         let mut channels = redis.channels.write().await;
         channels.remove(&client_id);
     }
-    println!("client {} finished", client_id);
+    println!("[client: {}] finished", client_id);
 }
