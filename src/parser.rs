@@ -126,19 +126,19 @@ impl RedisValueParser {
             match state {
                 MessageParserState::Initial => match input.next() {
                     Some((t, b'$')) => {
-                        println!(
-                            "[parser] {} {:?} {:?}: found an string",
-                            t, state, self.state_stack
-                        );
+                        // println!(
+                        //     "[parser] {} {:?} {:?}: found an string",
+                        //     t, state, self.state_stack
+                        // );
                         last_pos = t;
                         self.state_stack
                             .push(MessageParserState::reading_bulk_string());
                     }
                     Some((t, b'*')) => {
-                        println!(
-                            "[parser] {:?} {:?}: found an array",
-                            state, self.state_stack
-                        );
+                        // println!(
+                        //     "[parser] {:?} {:?}: found an array",
+                        //     state, self.state_stack
+                        // );
                         last_pos = t;
                         self.state_stack.push(MessageParserState::ReadingArray {
                             length: LengthState::Reading,
@@ -146,10 +146,10 @@ impl RedisValueParser {
                         });
                     }
                     Some((t, b'+')) => {
-                        println!(
-                            "[parser] {:?} {:?}: found an simple string",
-                            state, self.state_stack
-                        );
+                        // println!(
+                        //     "[parser] {:?} {:?}: found an simple string",
+                        //     state, self.state_stack
+                        // );
                         last_pos = t;
                         self.state_stack
                             .push(MessageParserState::reading_simple_string());

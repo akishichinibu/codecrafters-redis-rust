@@ -248,7 +248,7 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
                 parser.append(&buffer[0..n]);
                 match parser.parse() {
                     Ok((value, offset)) => {
-                        println!("read value: {:?}", value);
+                        println!("[read value] parse success: {:?}", value);
                         Ok((value, offset + 1))
                     }
                     Err(e) => panic!("{:?}", e),
