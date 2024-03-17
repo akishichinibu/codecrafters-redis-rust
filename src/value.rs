@@ -1,6 +1,8 @@
+use std::fmt::Debug;
+
 const CRLF: &[u8; 2] = b"\r\n";
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Clone)]
 pub struct RedisBulkString {
     pub data: Vec<u8>,
 }
@@ -23,20 +25,51 @@ impl Into<String> for &RedisBulkString {
     }
 }
 
-impl Into<RedisValue> for RedisBulkString {
+impl Into<RedisValue> for &RedisBulkString {
     fn into(self) -> RedisValue {
-        RedisValue::BulkString(Some(self))
+        RedisValue::BulkString(Some(RedisBulkString {
+            data: self.data.clone(),
+        }))
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
+impl Debug for RedisBulkString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            String::from_utf8_lossy(self.data.as_slice())
+                .replace("\r", "\\r")
+                .replace("\n", "\\n")
+        )
+    }
+}
+
+#[derive(PartialEq, Clone)]
 pub enum RedisValue {
     SimpleString(String),
     BulkString(Option<RedisBulkString>),
     Array(Vec<RedisValue>),
     Integer(usize),
     Rdb(Vec<u8>),
-    Bytes(Vec<u8>),
+}
+
+impl Debug for RedisValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RedisValue::SimpleString(s) => write!(f, "SimpleString[{}]", s),
+            RedisValue::BulkString(s) => match s {
+                None => write!(f, "BulkString[nil]"),
+                Some(s) => write!(f, "BulkString[{:?}]", s),
+            },
+            RedisValue::Array(a) => {
+                let elements: Vec<String> = a.iter().map(|r| format!("{:?}", r)).collect();
+                write!(f, "Array[{}]", elements.join(", "))
+            }
+            RedisValue::Integer(s) => write!(f, "Integer[{}]", s),
+            RedisValue::Rdb(content) => write!(f, "Rdb[{:?}]", content),
+        }
+    }
 }
 
 impl RedisValue {
@@ -54,6 +87,10 @@ impl RedisValue {
 
     pub fn simple_string<'a, S: Into<&'a str>>(s: S) -> RedisValue {
         RedisValue::SimpleString(s.into().to_string())
+    }
+
+    pub fn simple_string_from_bytes<'a, S: Into<&'a [u8]>>(s: S) -> RedisValue {
+        RedisValue::SimpleString(String::from_utf8(s.into().to_vec()).unwrap())
     }
 }
 
@@ -96,10 +133,6 @@ impl Into<Vec<u8>> for &RedisValue {
             RedisValue::Integer(i) => {
                 buffer.push(b':');
                 buffer.extend_from_slice(i.to_string().as_bytes());
-                buffer.extend_from_slice(CRLF);
-            }
-            RedisValue::Bytes(b) => {
-                buffer.extend_from_slice(b);
                 buffer.extend_from_slice(CRLF);
             }
         }

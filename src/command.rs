@@ -39,31 +39,21 @@ impl Into<RedisValue> for &RedisCommand {
                 ]
             }
             RedisCommand::Set(k, v, px) => {
-                let mut vs = vec![
-                    RedisValue::bulk_string("set"),
-                    k.to_owned().into(),
-                    v.to_owned().into(),
-                ];
+                let mut vs = vec![RedisValue::bulk_string("set"), k.into(), v.into()];
                 if let Some(px) = px {
                     vs.push(RedisValue::bulk_string("px"));
                     vs.push(RedisValue::bulk_string(px.to_string().as_str()));
                 }
                 vs
             }
-            RedisCommand::Get(k) => vec![RedisValue::bulk_string("get"), k.to_owned().into()],
-            RedisCommand::Info(v) => vec![RedisValue::bulk_string("info"), v.to_owned().into()],
+            RedisCommand::Get(k) => vec![RedisValue::bulk_string("get"), k.into()],
+            RedisCommand::Info(v) => vec![RedisValue::bulk_string("info"), v.into()],
             RedisCommand::Replconf(k, v) => {
-                vec![
-                    RedisValue::bulk_string("replconf"),
-                    k.to_owned().into(),
-                    v.to_owned().into(),
-                ]
+                vec![RedisValue::bulk_string("replconf"), k.into(), v.into()]
             }
-            RedisCommand::Psync(id, offset) => vec![
-                RedisValue::bulk_string("psync"),
-                id.to_owned().into(),
-                offset.to_owned().into(),
-            ],
+            RedisCommand::Psync(id, offset) => {
+                vec![RedisValue::bulk_string("psync"), id.into(), offset.into()]
+            }
             RedisCommand::Wait(number, timeout) => vec![
                 RedisValue::bulk_string("wait"),
                 RedisValue::bulk_string(number.to_string().as_str()),
@@ -77,10 +67,10 @@ impl Into<RedisValue> for &RedisCommand {
 #[derive(PartialEq, Debug, Clone)]
 pub enum RedisCommandError {
     Malform(String),
-    Malform2(MessageParserStateError),
-    DismatchedArgsNum,
+    ParsingError(MessageParserStateError),
+    DismatchedArgsNum(usize, usize),
     UnknownCommand(String),
-    NilArg,
+    IlleagalArg,
 }
 
 impl TryInto<RedisCommand> for RedisValue {
@@ -89,7 +79,12 @@ impl TryInto<RedisCommand> for RedisValue {
     fn try_into(self) -> Result<RedisCommand, Self::Error> {
         let args = match self {
             RedisValue::Array(args) => args,
-            _ => return Err(RedisCommandError::Malform("".to_string())),
+            _ => {
+                return Err(RedisCommandError::Malform(format!(
+                    "can only convert an array redis value to a command, but got {:?}",
+                    self
+                )))
+            }
         };
         println!(
             "[command] try to parse received value to command: {:?}",
@@ -98,27 +93,32 @@ impl TryInto<RedisCommand> for RedisValue {
 
         let (command, args) = args.split_first().unwrap();
 
-        let command_name = match command {
-            RedisValue::BulkString(Some(s)) => String::from_utf8(s.data.clone()).unwrap(),
-            _ => return Err(RedisCommandError::Malform("".to_string())),
-        }
-        .to_lowercase();
+        let command_name: String = match command {
+            RedisValue::BulkString(Some(s)) => s.into(),
+            _ => {
+                return Err(RedisCommandError::Malform(format!(
+                    "the command name must be a bulk string, but got {:?}",
+                    command
+                )))
+            }
+        };
+        let command_name = command_name.to_lowercase();
 
         let command = match command_name.as_str() {
             "ping" => RedisCommand::Ping,
             "echo" => match args.len() {
                 1 => match &args[0] {
                     RedisValue::BulkString(Some(s)) => RedisCommand::Echo(s.to_owned()),
-                    _ => return Err(RedisCommandError::NilArg),
+                    _ => return Err(RedisCommandError::IlleagalArg),
                 },
-                _ => return Err(RedisCommandError::DismatchedArgsNum),
+                n => return Err(RedisCommandError::DismatchedArgsNum(1, n)),
             },
             "get" => match args.len() {
                 1 => match &args[0] {
                     RedisValue::BulkString(Some(s)) => RedisCommand::Get(s.to_owned()),
-                    _ => return Err(RedisCommandError::NilArg),
+                    _ => return Err(RedisCommandError::IlleagalArg),
                 },
-                _ => return Err(RedisCommandError::DismatchedArgsNum),
+                n => return Err(RedisCommandError::DismatchedArgsNum(1, n)),
             },
             "set" => match args.len() {
                 2 => match &args[0] {
@@ -126,84 +126,84 @@ impl TryInto<RedisCommand> for RedisValue {
                         RedisValue::BulkString(Some(v)) => {
                             RedisCommand::Set(k.to_owned(), v.to_owned(), None)
                         }
-                        _ => return Err(RedisCommandError::NilArg),
+                        _ => return Err(RedisCommandError::IlleagalArg),
                     },
-                    _ => return Err(RedisCommandError::NilArg),
+                    _ => return Err(RedisCommandError::IlleagalArg),
                 },
                 4 => {
                     let k = match &args[0] {
                         RedisValue::BulkString(Some(k)) => k.to_owned(),
-                        _ => return Err(RedisCommandError::NilArg),
+                        _ => return Err(RedisCommandError::IlleagalArg),
                     };
                     let v = match &args[1] {
                         RedisValue::BulkString(Some(v)) => v.to_owned(),
-                        _ => return Err(RedisCommandError::NilArg),
+                        _ => return Err(RedisCommandError::IlleagalArg),
                     };
                     let px = match &args[3] {
                         RedisValue::BulkString(Some(px)) => String::from_utf8(px.data.to_vec())
                             .unwrap()
                             .parse()
                             .unwrap(),
-                        _ => return Err(RedisCommandError::NilArg),
+                        _ => return Err(RedisCommandError::IlleagalArg),
                     };
                     RedisCommand::Set(k.to_owned(), v.to_owned(), Some(px))
                 }
-                _ => return Err(RedisCommandError::DismatchedArgsNum),
+                n => return Err(RedisCommandError::DismatchedArgsNum(4, n)),
             },
             "info" => match args.len() {
                 1 => {
                     let v = match &args[0] {
                         RedisValue::BulkString(Some(k)) => k.to_owned(),
-                        _ => return Err(RedisCommandError::NilArg),
+                        _ => return Err(RedisCommandError::IlleagalArg),
                     };
                     RedisCommand::Info(v)
                 }
-                _ => return Err(RedisCommandError::DismatchedArgsNum),
+                n => return Err(RedisCommandError::DismatchedArgsNum(1, n)),
             },
             "replconf" => match args.len() {
                 2 => {
                     let arg1 = match &args[0] {
                         RedisValue::BulkString(Some(s)) => s,
-                        _ => return Err(RedisCommandError::NilArg),
+                        _ => return Err(RedisCommandError::IlleagalArg),
                     };
                     let arg2 = match &args[1] {
                         RedisValue::BulkString(Some(s)) => s,
-                        _ => return Err(RedisCommandError::NilArg),
+                        _ => return Err(RedisCommandError::IlleagalArg),
                     };
                     RedisCommand::Replconf(arg1.to_owned(), arg2.to_owned())
                 }
-                _ => return Err(RedisCommandError::DismatchedArgsNum),
+                n => return Err(RedisCommandError::DismatchedArgsNum(2, n)),
             },
             "psync" => match args.len() {
                 2 => {
                     let arg1 = match &args[0] {
                         RedisValue::BulkString(Some(s)) => s,
-                        _ => return Err(RedisCommandError::NilArg),
+                        _ => return Err(RedisCommandError::IlleagalArg),
                     };
                     let arg2 = match &args[1] {
                         RedisValue::BulkString(Some(s)) => s,
-                        _ => return Err(RedisCommandError::NilArg),
+                        _ => return Err(RedisCommandError::IlleagalArg),
                     };
 
                     RedisCommand::Psync(arg1.to_owned(), arg2.to_owned())
                 }
-                _ => return Err(RedisCommandError::DismatchedArgsNum),
+                n => return Err(RedisCommandError::DismatchedArgsNum(2, n)),
             },
             "wait" => match args.len() {
                 2 => {
                     let number: String = match &args[0] {
                         RedisValue::BulkString(Some(s)) => s.into(),
-                        _ => return Err(RedisCommandError::NilArg),
+                        _ => return Err(RedisCommandError::IlleagalArg),
                     };
                     let number: u64 = number.parse().unwrap();
                     let timeout: String = match &args[1] {
                         RedisValue::BulkString(Some(s)) => s.into(),
-                        _ => return Err(RedisCommandError::NilArg),
+                        _ => return Err(RedisCommandError::IlleagalArg),
                     };
                     let timeout: u64 = timeout.parse().unwrap();
                     RedisCommand::Wait(number, timeout)
                 }
-                _ => return Err(RedisCommandError::DismatchedArgsNum),
+                n => return Err(RedisCommandError::DismatchedArgsNum(1, n)),
             },
             s => return Err(RedisCommandError::UnknownCommand(s.to_string())),
         };
@@ -284,7 +284,7 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
         &mut self,
         parser: &mut RedisValueParser,
     ) -> Result<(Option<RedisValue>, usize), std::io::Error> {
-        println!("try to read a rdb {}", parser.buffer_len());
+        println!("[read_rdb] try to read a rdb {}", parser.buffer_len());
         let mut buffer: [u8; 102400] = [0; 102400];
 
         if let Ok((Some(value), offset)) = parser.parse_rdb() {

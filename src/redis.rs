@@ -37,11 +37,10 @@ pub struct StoreItem {
 
 #[derive(Debug, Clone)]
 pub struct Redis {
-    pub config: RedisConfig,
+    pub config: Arc<RedisConfig>,
 
     pub store: Arc<RwLock<HashMap<String, StoreItem>>>,
 
-    // pub clients: Arc<RwLock<HashMap<String, Arc<Mutex<TcpStream>>>>>,
     pub channels: Arc<RwLock<HashMap<String, Arc<RwLock<ClientChannel>>>>>,
     pub replicas: Arc<RwLock<HashSet<String>>>,
 }
@@ -50,10 +49,9 @@ impl Redis {
     pub fn new() -> Self {
         let config = RedisConfig::from_args();
         Redis {
-            config: config.clone(),
+            config: Arc::new(config),
             store: Arc::new(RwLock::new(HashMap::new())),
 
-            // clients: Arc::new(RwLock::new(HashMap::new())),
             channels: Arc::new(RwLock::new(HashMap::new())),
             replicas: Arc::new(RwLock::new(HashSet::new())),
         }

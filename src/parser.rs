@@ -48,6 +48,19 @@ impl MessageParserState {
             heading_zero: false,
         }
     }
+
+    fn reading_bulk_string() -> MessageParserState {
+        MessageParserState::ReadingBulkString {
+            length: LengthState::Reading,
+            content: Vec::new(),
+        }
+    }
+
+    fn reading_simple_string() -> MessageParserState {
+        MessageParserState::ReadingSimpleString {
+            content: Vec::new(),
+        }
+    }
 }
 
 trait VecExt<'a, U, T>
@@ -119,10 +132,7 @@ impl RedisValueParser {
                         );
                         last_pos = t;
                         self.state_stack
-                            .push(MessageParserState::ReadingBulkString {
-                                length: LengthState::Reading,
-                                content: Vec::new(),
-                            });
+                            .push(MessageParserState::reading_bulk_string());
                     }
                     Some((t, b'*')) => {
                         println!(
@@ -142,9 +152,7 @@ impl RedisValueParser {
                         );
                         last_pos = t;
                         self.state_stack
-                            .push(MessageParserState::ReadingSimpleString {
-                                content: Vec::new(),
-                            });
+                            .push(MessageParserState::reading_simple_string());
                     }
                     Some((t, eb)) => {
                         return Err(MessageParserStateError::UnexceptedToken(*eb, t, line!()))
@@ -288,11 +296,9 @@ impl RedisValueParser {
                 },
                 MessageParserState::ReadingSimpleString { mut content } => match input.next() {
                     Some((_, b'\r')) => {
-                        self.value_buffer.push(RedisValue::SimpleString(
-                            String::from_utf8(content).unwrap(),
-                        ));
-                        self.state_stack
-                            .push_in_reverse(vec![MessageParserState::WaitForSn]);
+                        self.value_buffer
+                            .push(RedisValue::simple_string_from_bytes(content.as_slice()));
+                        self.state_stack.push(MessageParserState::WaitForSn);
                     }
                     Some((_, b)) => {
                         content.push(*b);
