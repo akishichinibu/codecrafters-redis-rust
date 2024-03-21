@@ -157,6 +157,35 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
                 }
                 respond!(responser, vec![RedisValue::simple_string("OK")]);
             }
+            RedisCommand::Type(key) => {
+                let key: String = (&key).into();
+                let store = redis.store.read().await;
+                println!("[worker][{:?}] store: {:?}", client_id, store);
+                let value = match store.get(&key) {
+                    Some(item) => {
+                        if item.expired_at == 0 || item.expired_at >= utilities::now() {
+                            Some(item.value.clone())
+                        } else {
+                            drop(store);
+                            let mut store = redis.store.write().await;
+                            store.remove(&key);
+                            None
+                        }
+                    }
+                    None => None,
+                };
+                let response = if let Some(value) = value {
+                    match value {
+                        RedisValue::BulkString(_) => "string",
+                        RedisValue::SimpleString(_) => "string",
+                        RedisValue::Integer(_) => "integer",
+                        _ => panic!(),
+                    }
+                } else {
+                    "none"
+                };
+                respond!(responser, vec![RedisValue::simple_string(response)]);
+            }
             RedisCommand::Wait(number, timeout) => {
                 let started_at = utilities::now();
                 let _redis = redis.clone();

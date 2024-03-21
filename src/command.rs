@@ -13,6 +13,7 @@ pub enum RedisCommand {
     Echo(RedisBulkString),
     Get(RedisBulkString),
     Set(RedisBulkString, RedisBulkString, Option<u64>),
+    Type(RedisBulkString),
     Replconf(RedisBulkString, RedisBulkString),
     Info(RedisBulkString),
     Psync(RedisBulkString, RedisBulkString),
@@ -49,6 +50,7 @@ impl Into<RedisValue> for &RedisCommand {
                 vs
             }
             RedisCommand::Get(k) => vec![RedisValue::bulk_string("get"), k.into()],
+            RedisCommand::Type(k) => vec![RedisValue::bulk_string("type"), k.into()],
             RedisCommand::Info(v) => vec![RedisValue::bulk_string("info"), v.into()],
             RedisCommand::Replconf(k, v) => {
                 vec![RedisValue::bulk_string("replconf"), k.into(), v.into()]
@@ -158,6 +160,16 @@ impl TryInto<RedisCommand> for RedisValue {
                     RedisCommand::Set(k.to_owned(), v.to_owned(), Some(px))
                 }
                 n => return Err(RedisCommandError::DismatchedArgsNum(4, n)),
+            },
+            "type" => match args.len() {
+                1 => {
+                    let v = match &args[0] {
+                        RedisValue::BulkString(Some(k)) => k.to_owned(),
+                        _ => return Err(RedisCommandError::IlleagalArg),
+                    };
+                    RedisCommand::Type(v)
+                }
+                n => return Err(RedisCommandError::DismatchedArgsNum(1, n)),
             },
             "info" => match args.len() {
                 1 => {
