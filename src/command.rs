@@ -18,6 +18,7 @@ pub enum RedisCommand {
     Psync(RedisBulkString, RedisBulkString),
     Wait(u64, u64),
     Select(u64),
+    Config(RedisBulkString, RedisBulkString),
 }
 
 impl RedisCommand {
@@ -64,6 +65,9 @@ impl Into<RedisValue> for &RedisCommand {
                 RedisValue::bulk_string("select"),
                 RedisValue::bulk_string(index.to_string().as_str()),
             ],
+            RedisCommand::Config(method, key) => {
+                vec![RedisValue::bulk_string("config"), method.into(), key.into()]
+            }
         }
         .into()
     }
@@ -220,6 +224,20 @@ impl TryInto<RedisCommand> for RedisValue {
                     RedisCommand::Select(index)
                 }
                 n => return Err(RedisCommandError::DismatchedArgsNum(1, n)),
+            },
+            "config" => match args.len() {
+                2 => {
+                    let method = match &args[0] {
+                        RedisValue::BulkString(Some(s)) => s,
+                        _ => return Err(RedisCommandError::IlleagalArg),
+                    };
+                    let key = match &args[1] {
+                        RedisValue::BulkString(Some(s)) => s,
+                        _ => return Err(RedisCommandError::IlleagalArg),
+                    };
+                    RedisCommand::Config(method.to_owned(), key.to_owned())
+                }
+                n => return Err(RedisCommandError::DismatchedArgsNum(2, n)),
             },
             s => return Err(RedisCommandError::UnknownCommand(s.to_string())),
         };

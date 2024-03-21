@@ -206,6 +206,27 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
             RedisCommand::Select(_) => {
                 respond!(responser, vec![RedisValue::simple_string("ok")]);
             }
+            RedisCommand::Config(action, key) => {
+                let action: String = (&action).into();
+                let key: String = (&key).into();
+                let config = redis.config.clone();
+                let value = match action.to_lowercase().as_str() {
+                    "get" => match key.to_lowercase().as_str() {
+                        "dir" => {
+                            let dir = config.dir.clone();
+                            dir.map_or(RedisValue::null_bulk_string(), |r| {
+                                RedisValue::bulk_string(r.as_str())
+                            })
+                        }
+                        "dbfilename" => RedisValue::bulk_string(config.dbfilename.clone().as_str()),
+                        _ => panic!(),
+                    },
+                    _ => panic!(),
+                };
+                let key: RedisValue = RedisValue::bulk_string(key.as_str());
+                let response = RedisValue::Array(vec![key, value]);
+                respond!(responser, vec![response.to_owned()]);
+            }
         };
     }
 }

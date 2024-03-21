@@ -1,6 +1,6 @@
 use crate::client::ClientChannel;
 use crate::value::RedisValue;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::sync::RwLock;
@@ -14,6 +14,10 @@ pub struct RedisConfig {
     pub port: u32,
     #[structopt(long)]
     pub replicaof: Option<Vec<String>>,
+    #[structopt(long)]
+    pub dir: Option<String>,
+    #[structopt(long, default_value = "dump.rdb")]
+    pub dbfilename: String,
 }
 
 impl RedisConfig {
@@ -27,6 +31,18 @@ impl RedisConfig {
             None => None,
         }
     }
+
+    // pub fn dbfile(&self) -> Option<String> {
+    //     if let Some(config_dir) = self.dir {
+    //         let mut path = PathBuf::new();
+    //         path.push(config_dir);
+    //         path.push(self.dbfilename);
+    //         let path = path.to_str().unwrap().to_string();
+    //         Some(path)
+    //     } else {
+    //         None
+    //     }
+    // }
 }
 
 #[derive(Debug, Clone)]
@@ -48,8 +64,10 @@ pub struct Redis {
 impl Redis {
     pub fn new() -> Self {
         let config = RedisConfig::from_args();
+
         Redis {
             config: Arc::new(config),
+
             store: Arc::new(RwLock::new(HashMap::new())),
 
             channels: Arc::new(RwLock::new(HashMap::new())),
