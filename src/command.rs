@@ -17,6 +17,7 @@ pub enum RedisCommand {
     Info(RedisBulkString),
     Psync(RedisBulkString, RedisBulkString),
     Wait(u64, u64),
+    Select(u64),
 }
 
 impl RedisCommand {
@@ -58,6 +59,10 @@ impl Into<RedisValue> for &RedisCommand {
                 RedisValue::bulk_string("wait"),
                 RedisValue::bulk_string(number.to_string().as_str()),
                 RedisValue::bulk_string(timeout.to_string().as_str()),
+            ],
+            RedisCommand::Select(index) => vec![
+                RedisValue::bulk_string("select"),
+                RedisValue::bulk_string(index.to_string().as_str()),
             ],
         }
         .into()
@@ -161,7 +166,7 @@ impl TryInto<RedisCommand> for RedisValue {
                 n => return Err(RedisCommandError::DismatchedArgsNum(1, n)),
             },
             "replconf" => match args.len() {
-                2 => {
+                n => {
                     let arg1 = match &args[0] {
                         RedisValue::BulkString(Some(s)) => s,
                         _ => return Err(RedisCommandError::IlleagalArg),
@@ -205,6 +210,17 @@ impl TryInto<RedisCommand> for RedisValue {
                 }
                 n => return Err(RedisCommandError::DismatchedArgsNum(1, n)),
             },
+            "select" => match args.len() {
+                1 => {
+                    let index: String = match &args[0] {
+                        RedisValue::BulkString(Some(s)) => s.into(),
+                        _ => return Err(RedisCommandError::IlleagalArg),
+                    };
+                    let index: u64 = index.parse().unwrap();
+                    RedisCommand::Select(index)
+                }
+                n => return Err(RedisCommandError::DismatchedArgsNum(1, n)),
+            },
             s => return Err(RedisCommandError::UnknownCommand(s.to_string())),
         };
         Ok(command)
@@ -233,7 +249,10 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
         &mut self,
         parser: &mut RedisValueParser,
     ) -> Result<(Option<RedisValue>, usize), std::io::Error> {
-        println!("[read_value] try to read a value {}", parser.buffer_len());
+        println!(
+            "[read_value] try to read a value, parser buffer: {}",
+            parser.buffer_len()
+        );
         let mut buffer: [u8; 1024] = [0; 1024];
 
         if let Ok((Some(value), offset)) = parser.parse() {
@@ -244,7 +263,7 @@ impl RedisTcpStreamReadExt for OwnedReadHalf {
             Err(e) => Err(e),
             Ok(0) => Err(ErrorKind::ConnectionAborted.into()),
             Ok(n) => {
-                println!("[read_value] read bytes {}", n);
+                println!("[read_value] read bytes, length: {}", n);
                 parser.append(&buffer[0..n]);
                 match parser.parse() {
                     Ok((value, offset)) => {

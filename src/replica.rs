@@ -9,6 +9,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::RwLock;
+use tokio::{spawn, task};
 
 pub struct ReplicationInfo {
     pub role: String,
@@ -72,21 +73,33 @@ pub async fn handle_replica_handshake(
         .unwrap();
 
     reader.read_value(&mut parser).await.unwrap();
+
     reader.read_rdb(&mut parser).await.unwrap();
     Ok(((reader, writer), parser))
 }
 
 // read the command from master node and send them to the worker node
 pub async fn listen_to_master_progate(
-    _redis: Redis,
+    redis: Redis,
     connection: (OwnedReadHalf, OwnedWriteHalf),
     mut parser: RedisValueParser,
     worker_sender: Sender<WorkerMessage>,
 ) -> Result<(), std::io::Error> {
     println!("[replica progate] start to listen to master node");
     let (mut reader, mut writer) = connection;
-    let (sender, mut receiver) = mpsc::channel::<RedisValue>(8);
+    let (sender, mut receiver) = mpsc::channel::<RedisValue>(128);
     let mut offset: usize = 0;
+
+    task::spawn(async move {
+        println!("[replica] replica has a responser, try to receive");
+        loop {
+            if let Some(response) = receiver.recv().await {
+                writer.write_value(&response).await.unwrap();
+            } else {
+                break;
+            }
+        }
+    });
 
     loop {
         let (command, length) = match reader.read_command(&mut parser).await {
@@ -100,6 +113,7 @@ pub async fn listen_to_master_progate(
 
         if let Some(command) = command {
             let responser = match command.clone() {
+                // RedisCommand::Ping => Some(sender.clone()),
                 RedisCommand::Replconf(k, _) => {
                     let key: String = (&k).into();
                     let key = key.to_lowercase();
@@ -119,15 +133,9 @@ pub async fn listen_to_master_progate(
             };
             worker_sender.send(message).await.unwrap();
             println!("[replica] send command to replica worker: {:?}", command);
-
-            if responser.is_some() {
-                println!("[replica] replica has a responser, try to receive");
-                if let Some(response) = receiver.recv().await {
-                    writer.write_value(&response).await.unwrap();
-                }
-            }
         }
 
         offset += length;
     }
+    println!("[replica progate] progation done");
 }

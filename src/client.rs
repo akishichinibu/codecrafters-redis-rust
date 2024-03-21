@@ -44,7 +44,7 @@ pub async fn client_process(
     client: TcpStream,
     worker_sender: Sender<WorkerMessage>,
 ) {
-    println!("[client: {}] process started. ", client_id);
+    println!("[client][{}] process started. ", client_id);
     let (mut reader, mut writer) = client.into_split();
     let is_running = Arc::new(AtomicBool::new(true));
 
@@ -53,7 +53,7 @@ pub async fn client_process(
     let _client_id = client_id.clone();
     let _is_running = is_running.clone();
     let read_from_client_task = task::spawn(async move {
-        println!("[client: {}] start to read from stream", _client_id);
+        println!("[client][{}] start to read from stream", _client_id);
         let mut parser = RedisValueParser::new();
         while _is_running.load(Ordering::SeqCst) {
             let from_client = reader.read_command(&mut parser).await;
@@ -107,7 +107,7 @@ pub async fn client_process(
             writer.write_value(&response).await.unwrap();
             writer.flush().await.unwrap();
             println!(
-                "[client: {}] value {:?} has been writed to client",
+                "[client][{}] value {:?} has been writed to client",
                 _client_id, response
             );
         }
@@ -152,5 +152,5 @@ pub async fn client_process(
         let mut channels = redis.channels.write().await;
         channels.remove(&client_id);
     }
-    println!("[client: {}] finished", client_id);
+    println!("[client][{}] finished", client_id);
 }

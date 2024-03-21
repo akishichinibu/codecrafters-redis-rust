@@ -20,10 +20,10 @@ pub struct WorkerMessage {
 }
 
 macro_rules! respond {
-    ($responser:ident, $response:expr) => {
-        if let Some($responser) = $responser {
-            let responser = $responser.read().await;
-            for m in $response.iter() {
+    ($responser:ident, $response:expr) => {{
+        if let Some($responser) = ($responser) {
+            let responser = ($responser).read().await;
+            for m in ($response).iter() {
                 match responser.send(m.clone()).await {
                     Ok(_) => {}
                     Err(e) => panic!("{:?}", e),
@@ -31,7 +31,7 @@ macro_rules! respond {
             }
             println!("[worker] send response: {:?}", $response);
         }
-    };
+    }};
 }
 
 pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>) {
@@ -46,8 +46,13 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
         println!("[worker] messaged received: {:?}", message);
         let command: RedisCommand = message.command.clone();
 
+        let client_id = message.client_id.clone();
+        let is_replica = {
+            let replicas = redis.replicas.read().await;
+            replicas.contains_key(&client_id.clone().unwrap_or_default())
+        };
         let responser = if let Some(responser) = message.responser {
-            println!("[worker] has a responser");
+            println!("[worker][{:?}] has a responser", client_id);
             Some(responser)
         } else {
             None
@@ -58,12 +63,12 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
                 respond!(responser, vec![RedisValue::simple_string("PONG")]);
             }
             RedisCommand::Echo(value) => {
-                respond!(responser, [RedisValue::BulkString(Some(value.clone()))])
+                respond!(responser, vec![RedisValue::BulkString(Some(value.clone()))])
             }
             RedisCommand::Get(key) => {
                 let key: String = (&key).into();
                 let store = redis.store.read().await;
-                println!("[worker] store: {:?}", store);
+                println!("[worker][{:?}] store: {:?}", client_id, store);
                 let response = match store.get(&key) {
                     Some(item) => {
                         if item.expired_at == 0 || item.expired_at >= utilities::now() {
@@ -90,7 +95,7 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
                 .into();
                 respond!(responser, vec![value.clone()]);
             }
-            RedisCommand::Replconf(v1, _) => {
+            RedisCommand::Replconf(v1, v2) => {
                 let key: String = (&v1).into();
                 let key = key.to_lowercase();
                 let response = match key.as_str() {
@@ -101,6 +106,18 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
                             RedisValue::bulk_string(message.offset.to_string().as_str()),
                         ])]
                     }
+                    "ack" => {
+                        let mut replicas = redis.replicas.write().await;
+                        let v2s: String = (&v2).into();
+                        let offset = v2s.parse().unwrap();
+                        replicas.insert(client_id.clone().unwrap(), offset);
+                        println!(
+                            "replicas: {:?}, replica {:?} offset update to {}",
+                            replicas, client_id, offset
+                        );
+                        vec![]
+                    }
+                    "capa" => vec![RedisValue::simple_string("OK")],
                     _ => vec![RedisValue::simple_string("OK")],
                 };
                 respond!(responser, response);
@@ -110,12 +127,13 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
                 let response = format!("FULLRESYNC {} 0", id);
                 {
                     let mut replicas = redis.replicas.write().await;
-                    replicas.insert(id);
+                    replicas.insert(id, 0);
                     println!("replicas: {:?}", replicas);
                 }
                 respond!(responser, vec![
                             RedisValue::simple_string(response.as_str()),
                             RedisValue::Rdb(
+                                #[allow(warnings)]
                                 base64::decode("UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==").unwrap(),
                             ),
                         ]);
@@ -131,7 +149,7 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
                 {
                     let mut store = redis.store.write().await;
                     store.insert(key, StoreItem { value, expired_at });
-                    println!("[worker] store: {:?}", store);
+                    println!("[worker][{:?}] store: {:?}", client_id, store);
                 }
                 // if current node is master node, broadcast the write commmand to all replicas
                 if redis.config.get_replica_of() == None {
@@ -142,8 +160,14 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
             RedisCommand::Wait(number, timeout) => {
                 let started_at = utilities::now();
                 let _redis = redis.clone();
+                let _client_id = message.client_id.clone();
                 task::spawn(async move {
-                    println!("[worker] [wait] wait start");
+                    println!(
+                        "[worker][{:?}][wait] wait started for {} ms at {}",
+                        _client_id,
+                        timeout,
+                        utilities::now(),
+                    );
                     loop {
                         let replica_number = {
                             let replicas = _redis.replicas.read().await;
@@ -171,8 +195,16 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
                         responser,
                         vec![RedisValue::Integer(replica_number as usize)]
                     );
-                    println!("[worker] [wait] wait done");
+                    println!(
+                        "[worker][{:?}][wait] wait done at {} for {} ms",
+                        _client_id,
+                        utilities::now(),
+                        timeout
+                    );
                 });
+            }
+            RedisCommand::Select(_) => {
+                respond!(responser, vec![RedisValue::simple_string("ok")]);
             }
         };
     }
@@ -181,12 +213,12 @@ pub async fn worker_process(redis: Redis, mut receiver: Receiver<WorkerMessage>)
 pub async fn brocast_to_replicas(redis: Redis, command: RedisCommand) -> Result<(), ()> {
     let replicas = redis.replicas.read().await;
     println!(
-        "start to broadcast to replicas({}): {:?}",
+        "[worker] start to broadcast to replicas({}): {:?}",
         replicas.len(),
         replicas
     );
 
-    for id in replicas.iter() {
+    for (id, _) in replicas.iter() {
         let channel = {
             let channels = redis.channels.read().await;
             let channel = channels.get(id).unwrap();
@@ -198,9 +230,9 @@ pub async fn brocast_to_replicas(redis: Redis, command: RedisCommand) -> Result<
             writer.clone()
         };
         to_client_sender.send((&command).into()).await.unwrap();
-        println!("broadcast to client {} done, {:?}", id, command);
+        println!("[worker] broadcast to client {} done, {:?}", id, command);
     }
 
-    println!("broadcast to replicas done: {}", replicas.len());
+    println!("[worker] broadcast to replicas done: {}", replicas.len());
     Ok(())
 }

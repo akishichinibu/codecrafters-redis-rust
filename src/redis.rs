@@ -42,7 +42,7 @@ pub struct Redis {
     pub store: Arc<RwLock<HashMap<String, StoreItem>>>,
 
     pub channels: Arc<RwLock<HashMap<String, Arc<RwLock<ClientChannel>>>>>,
-    pub replicas: Arc<RwLock<HashSet<String>>>,
+    pub replicas: Arc<RwLock<HashMap<String, usize>>>,
 }
 
 impl Redis {
@@ -53,7 +53,7 @@ impl Redis {
             store: Arc::new(RwLock::new(HashMap::new())),
 
             channels: Arc::new(RwLock::new(HashMap::new())),
-            replicas: Arc::new(RwLock::new(HashSet::new())),
+            replicas: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
